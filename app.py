@@ -119,7 +119,5 @@ try:
                 enviar_ntfy(msg)
 except Exception as e:
     print(f"Erro na busca de Data de Pagamento: {e}")
-    # MENSAGEM DE TESTE (Remova após confirmar o recebimento)
-enviar_ntfy("🧪 TESTE DE CONEXÃO B3\nSe você recebeu esta mensagem, a automação do GitHub e o ntfy estão 100% operacionais!")
-
+    
 print("--- Varredura finalizada ---")
