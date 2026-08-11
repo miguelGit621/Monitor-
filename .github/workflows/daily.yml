@@ -1,3 +1,4 @@
+workflow_dispatch
 name: Monitor B3 Diario
 on:
   schedule:
