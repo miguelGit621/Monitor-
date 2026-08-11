@@ -15,62 +15,78 @@ NTFY_TOPIC = "notificacoes_b3_carteira_completa"
 def enviar_ntfy(mensagem):
     url = f"https://ntfy.sh/{NTFY_TOPIC}"
     try:
-        res = requests.post(url, data=mensagem.encode('utf-8'))
+        res = requests.post(url, data=mensagem.encode('utf-8'), timeout=10)
         print(f"Status NTFY enviado: {res.status_code}")
     except Exception as e:
         print(f"Erro ao enviar ntfy: {e}")
 
-# Lista de ações principais da B3 para monitoramento contínuo
+# Lista de ações para monitoramento
 TICKERS_B3 = [
     "VALE3.SA", "PETR4.SA", "ITSA4.SA", "BBAS3.SA", "BBDC4.SA",
     "ABEV3.SA", "TAEE11.SA", "EGIE3.SA", "CPLE6.SA", "VIVT3.SA",
     "KLBN11.SA", "SANB11.SA", "CXSE3.SA", "BBSE3.SA", "TRPL4.SA"
 ]
 
-print(f"=== Varredura B3 via Yahoo Finance ({dt_hoje.strftime('%d/%m/%Y')} a {dt_fim.strftime('%d/%m/%Y')}) ===")
+def processar_proventos():
+    print(f"=== Varredura B3 via Yahoo Finance ({dt_hoje.strftime('%d/%m/%Y')} a {dt_fim.strftime('%d/%m/%Y')}) ===")
+    notificados = 0
 
-notificados = 0
-
-for ticker_symbol in TICKERS_B3:
-    try:
-        ticker = yf.Ticker(ticker_symbol)
+    for ticker_symbol in TICKERS_B3:
         ticker_clean = ticker_symbol.replace(".SA", "")
-        
-        # Obtém o calendário de eventos e dividendos do ativo
-        calendar = ticker.calendar
-        
-        if calendar is not None and not calendar.empty:
-            # Verifica datas de proventos/ex-date no calendário do Yahoo Finance
-            for col in calendar.columns if hasattr(calendar, 'columns') else []:
-                val = calendar[col].get("Ex-Dividend Date") or calendar[col].get("Dividend Date")
-                if val:
-                    data_evento = val.date() if hasattr(val, 'date') else None
-                    if data_evento and dt_hoje <= data_evento <= dt_fim:
-                        dias = (data_evento - dt_hoje).days
-                        prefixo = "🚨 DATA COM HOJE" if dias == 0 else ("⚠️ DATA COM AMANHÃ" if dias == 1 else f"📅 DATA COM EM {dias} DIAS")
-                        
-                        msg = f"{prefixo} ({data_evento.strftime('%d/%m/%Y')}) - {ticker_clean}\n💵 Tipo: Provento (Dividendo/JCP)"
-                        print(f"-> Disparando: {ticker_clean} ({data_evento})")
-                        enviar_ntfy(msg)
-                        notificados += 1
+        try:
+            ticker = yf.Ticker(ticker_symbol)
 
-        # Checagem complementar do histórico recente de dividendos
-        actions = ticker.actions
-        if actions is not None and not actions.empty and "Dividends" in actions.columns:
-            divs = actions[actions["Dividends"] > 0]
-            for idx, row in divs.iterrows():
-                dt_div = idx.date()
-                if dt_hoje <= dt_div <= dt_fim:
-                    valor = row["Dividends"]
-                    dias = (dt_div - dt_hoje).days
-                    prefixo = "🚨 DATA COM HOJE" if dias == 0 else ("⚠️ DATA COM AMANHÃ" if dias == 1 else f"📅 DATA COM EM {dias} DIAS")
-                    
-                    msg = f"{prefixo} ({dt_div.strftime('%d/%m/%Y')}) - {ticker_clean}\n💵 Tipo: Provento\nValor: R$ {valor:.4f}"
-                    print(f"-> Disparando via histórico: {ticker_clean}")
-                    enviar_ntfy(msg)
-                    notificados += 1
+            # 1. Checagem do Calendário
+            try:
+                cal = ticker.calendar
+                if cal is not None:
+                    # Trata o retorno como dicionário ou DataFrame
+                    ex_date = None
+                    if isinstance(cal, dict) and "Ex-Dividend Date" in cal:
+                        ex_date = cal["Ex-Dividend Date"]
+                        if isinstance(ex_date, list) and len(ex_date) > 0:
+                            ex_date = ex_date[0]
+                    elif hasattr(cal, "get"):
+                        ex_date = cal.get("Ex-Dividend Date")
 
-    except Exception as e:
-        print(f"Erro ao processar {ticker_symbol}: {e}")
+                    if ex_date:
+                        data_evt = ex_date.date() if hasattr(ex_date, 'date') else ex_date
+                        if isinstance(data_evt, datetime):
+                            data_evt = data_evt.date()
 
-print(f"=== Varredura concluída. Total de notificações enviadas: {notificados} ===")
+                        if dt_hoje <= data_evt <= dt_fim:
+                            dias = (data_evt - dt_hoje).days
+                            prefixo = "🚨 DATA COM HOJE" if dias == 0 else ("⚠️ DATA COM AMANHÃ" if dias == 1 else f"📅 DATA COM EM {dias} DIAS")
+                            msg = f"{prefixo} ({data_evt.strftime('%d/%m/%Y')}) - {ticker_clean}\n💵 Tipo: Provento (Calendário)"
+                            print(f"-> Disparando evento: {ticker_clean}")
+                            enviar_ntfy(msg)
+                            notificados += 1
+            except Exception as err_cal:
+                print(f"Aviso no calendário de {ticker_clean}: {err_cal}")
+
+            # 2. Checagem dos Dividendos Recentes/Anunciados
+            try:
+                actions = ticker.actions
+                if actions is not None and not actions.empty and "Dividends" in actions.columns:
+                    divs = actions[actions["Dividends"] > 0]
+                    for idx, row in divs.iterrows():
+                        dt_div = idx.date() if hasattr(idx, 'date') else idx
+                        if dt_hoje <= dt_div <= dt_fim:
+                            valor = row["Dividends"]
+                            dias = (dt_div - dt_hoje).days
+                            prefixo = "🚨 DATA COM HOJE" if dias == 0 else ("⚠️ DATA COM AMANHÃ" if dias == 1 else f"📅 DATA COM EM {dias} DIAS")
+                            msg = f"{prefixo} ({dt_div.strftime('%d/%m/%Y')}) - {ticker_clean}\n💵 Tipo: Provento\nValor: R$ {valor:.4f}"
+                            print(f"-> Disparando dividendo: {ticker_clean}")
+                            enviar_ntfy(msg)
+                            notificados += 1
+            except Exception as err_act:
+                print(f"Aviso no histórico de {ticker_clean}: {err_act}")
+
+        except Exception as e:
+            print(f"Erro ao carregar dados de {ticker_symbol}: {e}")
+
+    print(f"=== Varredura concluída. Total de notificações enviadas: {notificados} ===")
+
+if __name__ == "__main__":
+    processar_proventos()
+    
