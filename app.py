@@ -1,6 +1,7 @@
 from datetime import datetime, timedelta
 import zoneinfo
 import requests
+import yfinance as yf
 
 # 1. Configuração de Fuso Horário do Brasil
 fuso_br = zoneinfo.ZoneInfo("America/Sao_Paulo")
@@ -9,7 +10,7 @@ agora_br = datetime.now(fuso_br)
 dt_hoje = agora_br.date()
 dt_fim = dt_hoje + timedelta(days=7)
 
-NTFY_TOPIC = "notificacoes_b3_carteira_completa" 
+NTFY_TOPIC = "notificacoes_b3_carteira_completa"
 
 def enviar_ntfy(mensagem):
     url = f"https://ntfy.sh/{NTFY_TOPIC}"
@@ -19,85 +20,57 @@ def enviar_ntfy(mensagem):
     except Exception as e:
         print(f"Erro ao enviar ntfy: {e}")
 
-HEADERS = {
-    'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
-    'Accept': 'application/json, text/plain, */*'
-}
+# Lista de ações principais da B3 para monitoramento contínuo
+TICKERS_B3 = [
+    "VALE3.SA", "PETR4.SA", "ITSA4.SA", "BBAS3.SA", "BBDC4.SA",
+    "ABEV3.SA", "TAEE11.SA", "EGIE3.SA", "CPLE6.SA", "VIVT3.SA",
+    "KLBN11.SA", "SANB11.SA", "CXSE3.SA", "BBSE3.SA", "TRPL4.SA"
+]
 
-def converter_para_data(data_str):
-    if not data_str or data_str == "-":
-        return None
-    data_clean = str(data_str).split("T")[0].split(" ")[0].strip()
-    for fmt in ("%d/%m/%Y", "%Y-%m-%d"):
-        try:
-            return datetime.strptime(data_clean, fmt).date()
-        except ValueError:
-            pass
-    return None
+print(f"=== Varredura B3 via Yahoo Finance ({dt_hoje.strftime('%d/%m/%Y')} a {dt_fim.strftime('%d/%m/%Y')}) ===")
 
-def identificar_tipo_provento(raw_tipo):
-    if not raw_tipo:
-        return "Provento", "💰"
-    tipo_upper = str(raw_tipo).upper()
-    if "JCP" in tipo_upper or "JUROS" in tipo_upper:
-        return "JCP (Juros s/ Capital Próprio)", "🏛️"
-    elif "DIVIDENDO" in tipo_upper:
-        return "Dividendo", "💵"
-    elif "AMORTI" in tipo_upper:
-        return "Amortização", "🔄"
-    else:
-        return str(raw_tipo).title(), "💰"
+notificados = 0
 
-def buscar_proventos_investnews():
-    print(f"=== Varredura B3 via InvestNews ({dt_hoje.strftime('%d/%m/%Y')} a {dt_fim.strftime('%d/%m/%Y')}) ===")
-    
-    # Endpoint público do InvestNews (Dados B3 sem bloqueio Cloudflare)
-    url = "https://api.investnews.com.br/wp-json/investnews/v1/proventos"
-    
+for ticker_symbol in TICKERS_B3:
     try:
-        response = requests.get(url, headers=HEADERS, timeout=15)
-        print(f"Status da resposta: {response.status_code}")
+        ticker = yf.Ticker(ticker_symbol)
+        ticker_clean = ticker_symbol.replace(".SA", "")
+        
+        # Obtém o calendário de eventos e dividendos do ativo
+        calendar = ticker.calendar
+        
+        if calendar is not None and not calendar.empty:
+            # Verifica datas de proventos/ex-date no calendário do Yahoo Finance
+            for col in calendar.columns if hasattr(calendar, 'columns') else []:
+                val = calendar[col].get("Ex-Dividend Date") or calendar[col].get("Dividend Date")
+                if val:
+                    data_evento = val.date() if hasattr(val, 'date') else None
+                    if data_evento and dt_hoje <= data_evento <= dt_fim:
+                        dias = (data_evento - dt_hoje).days
+                        prefixo = "🚨 DATA COM HOJE" if dias == 0 else ("⚠️ DATA COM AMANHÃ" if dias == 1 else f"📅 DATA COM EM {dias} DIAS")
+                        
+                        msg = f"{prefixo} ({data_evento.strftime('%d/%m/%Y')}) - {ticker_clean}\n💵 Tipo: Provento (Dividendo/JCP)"
+                        print(f"-> Disparando: {ticker_clean} ({data_evento})")
+                        enviar_ntfy(msg)
+                        notificados += 1
 
-        if response.status_code == 200:
-            dados = response.json()
-            eventos = dados.get("data", []) if isinstance(dados, dict) else dados
-            print(f"Total de proventos retornados na API: {len(eventos)}")
-            
-            notificados = 0
-            for ev in eventos:
-                ticker = str(ev.get("ticker") or ev.get("code") or ev.get("symbol") or "").upper().strip()
-                data_com = converter_para_data(ev.get("data_com") or ev.get("dateCom"))
-                data_pag = converter_para_data(ev.get("data_pagamento") or ev.get("paymentDate"))
-                tipo_nome, icone = identificar_tipo_provento(ev.get("tipo") or ev.get("earningType"))
-                valor = ev.get("valor") or ev.get("value") or 0
-
-                # 1. Alerta de Data COM
-                if data_com and dt_hoje <= data_com <= dt_fim:
-                    dias = (data_com - dt_hoje).days
+        # Checagem complementar do histórico recente de dividendos
+        actions = ticker.actions
+        if actions is not None and not actions.empty and "Dividends" in actions.columns:
+            divs = actions[actions["Dividends"] > 0]
+            for idx, row in divs.iterrows():
+                dt_div = idx.date()
+                if dt_hoje <= dt_div <= dt_fim:
+                    valor = row["Dividends"]
+                    dias = (dt_div - dt_hoje).days
                     prefixo = "🚨 DATA COM HOJE" if dias == 0 else ("⚠️ DATA COM AMANHÃ" if dias == 1 else f"📅 DATA COM EM {dias} DIAS")
-                    msg = f"{prefixo} ({data_com.strftime('%d/%m/%Y')}) - {ticker}\n{icone} Tipo: {tipo_nome}\nValor: R$ {valor}"
-                    print(f"-> Disparando Data COM: {ticker}")
+                    
+                    msg = f"{prefixo} ({dt_div.strftime('%d/%m/%Y')}) - {ticker_clean}\n💵 Tipo: Provento\nValor: R$ {valor:.4f}"
+                    print(f"-> Disparando via histórico: {ticker_clean}")
                     enviar_ntfy(msg)
                     notificados += 1
-
-                # 2. Alerta de Pagamento
-                if data_pag and dt_hoje <= data_pag <= dt_fim:
-                    dias = (data_pag - dt_hoje).days
-                    prefixo = "✅ PAGAMENTO HOJE" if dias == 0 else ("🗓️ PAGAMENTO AMANHÃ" if dias == 1 else f"💰 PAGAMENTO EM {dias} DIAS")
-                    msg = f"{prefixo} ({data_pag.strftime('%d/%m/%Y')}) - {ticker}\n{icone} Tipo: {tipo_nome}\nValor: R$ {valor}"
-                    print(f"-> Disparando Pagamento: {ticker}")
-                    enviar_ntfy(msg)
-                    notificados += 1
-
-            print(f"=== Varredura concluída. Total de notificações enviadas: {notificados} ===")
-            return True
-        else:
-            print(f"Erro na API InvestNews: {response.status_code}")
-            return False
 
     except Exception as e:
-        print(f"Erro na requisição: {e}")
-        return False
+        print(f"Erro ao processar {ticker_symbol}: {e}")
 
-if __name__ == "__main__":
-    buscar_proventos_investnews()
+print(f"=== Varredura concluída. Total de notificações enviadas: {notificados} ===")
