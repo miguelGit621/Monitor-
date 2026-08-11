@@ -9,13 +9,12 @@ agora_br = datetime.now(fuso_br)
 dt_hoje = agora_br.date()
 dt_amanha = dt_hoje + timedelta(days=1)
 
-# Janela ampla de busca (3 dias atrás até 7 dias à frente)
-dt_inicio = dt_hoje - timedelta(days=3)
+# Janela de busca (7 dias atrás até 7 dias à frente)
+dt_inicio = dt_hoje - timedelta(days=7)
 dt_fim = dt_hoje + timedelta(days=7)
 
-# Formato exigido na URL pelo Status Invest: DD/MM/YYYY
-inicio_url = dt_inicio.strftime("%d/%m/%Y")
-fim_url = dt_fim.strftime("%d/%m/%Y")
+inicio_br = dt_inicio.strftime("%d/%m/%Y")
+fim_br = dt_fim.strftime("%d/%m/%Y")
 
 NTFY_TOPIC = "notificacoes_b3_carteira_completa" 
 
@@ -31,93 +30,114 @@ HEADERS = {
     'Accept': 'application/json, text/plain, */*'
 }
 
+def extrair_ticker(evento):
+    return str(
+        evento.get("code") or 
+        evento.get("ticker") or 
+        evento.get("symbol") or 
+        evento.get("companyName") or 
+        "N/A"
+    ).upper().strip()
+
 def converter_para_data(data_str):
-    """Converte strings de data (DD/MM/YYYY ou YYYY-MM-DD) em objeto date do Python"""
     if not data_str:
         return None
-    data_str = data_str.split("T")[0].strip()
+    data_clean = str(data_str).split("T")[0].split(" ")[0].strip()
     for fmt in ("%d/%m/%Y", "%Y-%m-%d"):
         try:
-            return datetime.strptime(data_str, fmt).date()
+            return datetime.strptime(data_clean, fmt).date()
         except ValueError:
             pass
     return None
 
+def identificar_tipo_provento(raw_tipo):
+    """Normaliza o tipo do provento (Dividendo, JCP, Amortização)"""
+    if not raw_tipo:
+        return "Provento", "💰"
+    
+    tipo_upper = str(raw_tipo).upper()
+    
+    if "JCP" in tipo_upper or "JUROS" in tipo_upper:
+        return "JCP (Juros s/ Capital Próprio)", "🏛️"
+    elif "DIVIDENDO" in tipo_upper:
+        return "Dividendo", "💵"
+    elif "AMORTI" in tipo_upper:
+        return "Amortização", "🔄"
+    else:
+        return str(raw_tipo).capitalize(), "💰"
+
 def obter_dy_str(evento):
-    """Extrai e formata o Dividend Yield (%) do evento se disponível na API"""
     dy = evento.get("dy") or evento.get("dividendYield") or evento.get("yield")
     if dy is not None:
         try:
-            dy_float = float(dy)
-            return f"{dy_float:.2f}%"
+            return f"{float(dy):.2f}%"
         except (ValueError, TypeError):
             pass
     return "N/D"
 
-print(f"--- Varredura Geral B3 em {dt_hoje.strftime('%d/%m/%Y')} ---")
+print(f"=== Varredura Geral B3 (Proventos) - Hoje: {dt_hoje.strftime('%d/%m/%Y')} ===")
 
 # ==========================================
-# 1. BUSCA DE DATAS COM
+# 1. BUSCA DE DATAS COM (Dividendo / JCP / Amortização)
 # ==========================================
-url_com = f"https://statusinvest.com.br/acao/getevents?dateCom.start={inicio_url}&dateCom.end={fim_url}&byDateCom=true"
+url_com = f"https://statusinvest.com.br/acao/getevents?dateCom.start={inicio_br}&dateCom.end={fim_br}&byDateCom=true"
 
 try:
-    res_com = requests.get(url_com, headers=HEADERS, timeout=15)
-    if res_com.status_code == 200:
-        eventos_com = res_com.json()
-        print(f"Eventos de Data COM encontrados no período ({inicio_url} a {fim_url}): {len(eventos_com)}")
+    res = requests.get(url_com, headers=HEADERS, timeout=15)
+    if res.status_code == 200:
+        eventos = res.json()
+        print(f"Eventos retornados no período: {len(eventos)}")
         
-        for evento in eventos_com:
-            ticker = evento.get("code", "N/A")
-            raw_date = evento.get("dateCom", "")
-            data_evento = converter_para_data(raw_date)
+        for ev in eventos:
+            ticker = extrair_ticker(ev)
+            data_com = converter_para_data(ev.get("dateCom") or ev.get("approvedOn"))
             
-            tipo = evento.get("earningType", "Provento")
-            valor = evento.get("resultAbsoluteValue", 0)
-            dy_str = obter_dy_str(evento)
+            tipo_nome, icone = identificar_tipo_provento(ev.get("earningType"))
+            valor = ev.get("resultAbsoluteValue", 0)
+            dy_str = obter_dy_str(ev)
 
-            if data_evento == dt_hoje:
-                msg = f"🚨 DATA COM HOJE ({dt_hoje.strftime('%d/%m/%Y')}) - {ticker}\nTipo: {tipo}\nValor: R$ {valor}\nDY: {dy_str}"
-                print(f"-> ENCONTRADO: {msg}")
+            if data_com == dt_hoje:
+                msg = f"🚨 DATA COM HOJE ({dt_hoje.strftime('%d/%m/%Y')}) - {ticker}\n{icone} Tipo: {tipo_nome}\nValor: R$ {valor}\nDY: {dy_str}"
+                print(f"-> ALERTA HOJE: {ticker} ({tipo_nome})")
                 enviar_ntfy(msg)
-            elif data_evento == dt_amanha:
-                msg = f"⚠️ DATA COM AMANHÃ ({dt_amanha.strftime('%d/%m/%Y')}) - {ticker}\nTipo: {tipo}\nValor: R$ {valor}\nDY: {dy_str}"
-                print(f"-> ENCONTRADO: {msg}")
+                
+            elif data_com == dt_amanha:
+                msg = f"⚠️ DATA COM AMANHÃ ({dt_amanha.strftime('%d/%m/%Y')}) - {ticker}\n{icone} Tipo: {tipo_nome}\nValor: R$ {valor}\nDY: {dy_str}"
+                print(f"-> ALERTA AMANHÃ: {ticker} ({tipo_nome})")
                 enviar_ntfy(msg)
-            else:
-                print(f" - {ticker}: Data COM em {raw_date} (fora de hoje/amanhã)")
+
 except Exception as e:
-    print(f"Erro na busca de Data COM: {e}")
+    print(f"Erro no rastreamento de proventos: {e}")
 
 # ==========================================
-# 2. BUSCA DE DATAS DE PAGAMENTO
+# 2. BUSCA DE PAGAMENTOS
 # ==========================================
-url_pagamento = f"https://statusinvest.com.br/acao/getevents?paymentDate.start={inicio_url}&paymentDate.end={fim_url}&byPaymentDate=true"
+url_pag = f"https://statusinvest.com.br/acao/getevents?paymentDate.start={inicio_br}&paymentDate.end={fim_br}&byPaymentDate=true"
 
 try:
-    res_pag = requests.get(url_pagamento, headers=HEADERS, timeout=15)
+    res_pag = requests.get(url_pag, headers=HEADERS, timeout=15)
     if res_pag.status_code == 200:
         eventos_pag = res_pag.json()
-        print(f"Eventos de Pagamento encontrados no período ({inicio_url} a {fim_url}): {len(eventos_pag)}")
         
-        for evento in eventos_pag:
-            ticker = evento.get("code", "N/A")
-            raw_date = evento.get("paymentDate", "")
-            data_evento = converter_para_data(raw_date)
+        for ev in eventos_pag:
+            ticker = extrair_ticker(ev)
+            data_pag = converter_para_data(ev.get("paymentDate"))
             
-            tipo = evento.get("earningType", "Provento")
-            valor = evento.get("resultAbsoluteValue", 0)
-            dy_str = obter_dy_str(evento)
+            tipo_nome, icone = identificar_tipo_provento(ev.get("earningType"))
+            valor = ev.get("resultAbsoluteValue", 0)
+            dy_str = obter_dy_str(ev)
 
-            if data_evento == dt_hoje:
-                msg = f"💰 PAGAMENTO HOJE ({dt_hoje.strftime('%d/%m/%Y')}) - {ticker}\nTipo: {tipo}\nValor: R$ {valor}\nDY: {dy_str}"
-                print(f"-> ENCONTRADO: {msg}")
+            if data_pag == dt_hoje:
+                msg = f"✅ PAGAMENTO HOJE ({dt_hoje.strftime('%d/%m/%Y')}) - {ticker}\n{icone} Tipo: {tipo_nome}\nValor: R$ {valor}\nDY: {dy_str}"
+                print(f"-> PAGAMENTO HOJE: {ticker} ({tipo_nome})")
                 enviar_ntfy(msg)
-            elif data_evento == dt_amanha:
-                msg = f"💵 PAGAMENTO AMANHÃ ({dt_amanha.strftime('%d/%m/%Y')}) - {ticker}\nTipo: {tipo}\nValor: R$ {valor}\nDY: {dy_str}"
-                print(f"-> ENCONTRADO: {msg}")
+                
+            elif data_pag == dt_amanha:
+                msg = f"🗓️ PAGAMENTO AMANHÃ ({dt_amanha.strftime('%d/%m/%Y')}) - {ticker}\n{icone} Tipo: {tipo_nome}\nValor: R$ {valor}\nDY: {dy_str}"
+                print(f"-> PAGAMENTO AMANHÃ: {ticker} ({tipo_nome})")
                 enviar_ntfy(msg)
+
 except Exception as e:
-    print(f"Erro na busca de Data de Pagamento: {e}")
-    
-print("--- Varredura finalizada ---")
+    print(f"Erro no rastreamento de pagamentos: {e}")
+
+print("=== Varredura finalizada ===")
