@@ -1,4 +1,5 @@
 workflow_dispatch
+name: monitor B3 diario 
 on:
   schedule:
     - cron: '0 11 * * *' # Executa diariamente às 08:00 AM (Horário de Brasília)
