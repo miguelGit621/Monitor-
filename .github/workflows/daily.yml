@@ -1,4 +1,4 @@
-name: Monitor B3 Diario
+name: Monitor B3 Diario # Forçar atualização
 on:
   schedule:
     - cron: '0 11 * * *'
