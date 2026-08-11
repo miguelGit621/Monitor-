@@ -2,12 +2,12 @@ from datetime import datetime, timedelta
 import zoneinfo
 import requests
 
-# 1. Configuração de Fuso Horário do Brasil
+# 1. Configuração de Fuso Horário
 fuso_br = zoneinfo.ZoneInfo("America/Sao_Paulo")
 agora_br = datetime.now(fuso_br)
 
 dt_hoje = agora_br.date()
-dt_fim = dt_hoje + timedelta(days=7) # Monitora até 7 dias no futuro
+dt_fim = dt_hoje + timedelta(days=7)
 
 inicio_br = dt_hoje.strftime("%d/%m/%Y")
 fim_br = dt_fim.strftime("%d/%m/%Y")
@@ -17,13 +17,15 @@ NTFY_TOPIC = "notificacoes_b3_carteira_completa"
 def enviar_ntfy(mensagem):
     url = f"https://ntfy.sh/{NTFY_TOPIC}"
     try:
-        requests.post(url, data=mensagem.encode('utf-8'))
+        res = requests.post(url, data=mensagem.encode('utf-8'))
+        print(f"Status NTFY: {res.status_code}")
     except Exception as e:
         print(f"Erro ao enviar ntfy: {e}")
 
 HEADERS = {
-    'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
-    'Accept': 'application/json, text/plain, */*'
+    'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36',
+    'Accept': 'application/json, text/plain, */*',
+    'Referer': 'https://statusinvest.com.br/'
 }
 
 def extrair_ticker(evento):
@@ -36,7 +38,7 @@ def extrair_ticker(evento):
     ).upper().strip()
 
 def converter_para_data(data_str):
-    if not data_str:
+    if not data_str or data_str == "-":
         return None
     data_clean = str(data_str).split("T")[0].split(" ")[0].strip()
     for fmt in ("%d/%m/%Y", "%Y-%m-%d"):
@@ -59,89 +61,63 @@ def identificar_tipo_provento(raw_tipo):
     elif "AMORTI" in tipo_upper:
         return "Amortização", "🔄"
     else:
-        return str(raw_tipo).capitalize(), "💰"
+        return str(raw_tipo).title(), "💰"
 
-def obter_dy_str(evento):
-    dy = evento.get("dy") or evento.get("dividendYield") or evento.get("yield")
-    if dy is not None:
-        try:
-            return f"{float(dy):.2f}%"
-        except (ValueError, TypeError):
-            pass
-    return "N/D"
-
-print(f"=== Varredura Geral B3 ({inicio_br} até {fim_br}) ===")
-
-# ==========================================
-# 1. BUSCA DE DATAS COM (PRÓXIMOS 7 DIAS)
-# ==========================================
-url_com = f"https://statusinvest.com.br/acao/getevents?dateCom.start={inicio_br}&dateCom.end={fim_br}&byDateCom=true"
-
-try:
-    res = requests.get(url_com, headers=HEADERS, timeout=15)
-    if res.status_code == 200:
-        eventos = res.json()
-        print(f"Eventos de Data COM localizados no período: {len(eventos)}")
+def buscar_e_notificar():
+    print(f"=== Varredura de Proventos B3 ({inicio_br} até {fim_br}) ===")
+    
+    # URL unificada com os parâmetros necessários
+    url = f"https://statusinvest.com.br/acao/getevents?dateCom.start={inicio_br}&dateCom.end={fim_br}&byDateCom=true"
+    
+    try:
+        response = requests.get(url, headers=HEADERS, timeout=15)
+        print(f"Status da requisição: {response.status_code}")
         
+        if response.status_code != 200:
+            print("Não foi possível acessar a API de proventos.")
+            return
+
+        eventos = response.json()
+        print(f"Total de eventos retornados na janela: {len(eventos)}")
+
+        notificados = 0
         for ev in eventos:
             ticker = extrair_ticker(ev)
-            data_com = converter_para_data(ev.get("dateCom") or ev.get("approvedOn"))
             
-            tipo_nome, icone = identificar_tipo_provento(ev.get("earningType"))
-            valor = ev.get("resultAbsoluteValue", 0)
-            dy_str = obter_dy_str(ev)
-
-            # Notifica qualquer evento que esteja no intervalo entre HOJE e os próximos 7 dias
-            if data_com and dt_hoje <= data_com <= dt_fim:
-                dias_restantes = (data_com - dt_hoje).days
-                
-                if dias_restantes == 0:
-                    status_str = f"🚨 DATA COM HOJE ({data_com.strftime('%d/%m/%Y')})"
-                elif dias_restantes == 1:
-                    status_str = f"⚠️ DATA COM AMANHÃ ({data_com.strftime('%d/%m/%Y')})"
-                else:
-                    status_str = f"📅 DATA COM EM {dias_restantes} DIAS ({data_com.strftime('%d/%m/%Y')})"
-
-                msg = f"{status_str} - {ticker}\n{icone} Tipo: {tipo_nome}\nValor: R$ {valor}\nDY: {dy_str}"
-                print(f"-> NOTIFICANDO: {ticker} ({data_com.strftime('%d/%m/%Y')})")
-                enviar_ntfy(msg)
-
-except Exception as e:
-    print(f"Erro no rastreamento de proventos: {e}")
-
-# ==========================================
-# 2. BUSCA DE PAGAMENTOS (PRÓXIMOS 7 DIAS)
-# ==========================================
-url_pag = f"https://statusinvest.com.br/acao/getevents?paymentDate.start={inicio_br}&paymentDate.end={fim_br}&byPaymentDate=true"
-
-try:
-    res_pag = requests.get(url_pag, headers=HEADERS, timeout=15)
-    if res_pag.status_code == 200:
-        eventos_pag = res_pag.json()
-        
-        for ev in eventos_pag:
-            ticker = extrair_ticker(ev)
+            # Checa os possíveis campos de Data COM
+            data_com = converter_para_data(ev.get("dateCom") or ev.get("approvedOn") or ev.get("dateApproved"))
+            
+            # Checa os possíveis campos de Data de Pagamento
             data_pag = converter_para_data(ev.get("paymentDate"))
             
-            tipo_nome, icone = identificar_tipo_provento(ev.get("earningType"))
-            valor = ev.get("resultAbsoluteValue", 0)
-            dy_str = obter_dy_str(ev)
-
-            if data_pag and dt_hoje <= data_pag <= dt_fim:
-                dias_restantes = (data_pag - dt_hoje).days
+            tipo_nome, icone = identificar_tipo_provento(ev.get("earningType") or ev.get("type"))
+            valor = ev.get("resultAbsoluteValue") or ev.get("value") or 0
+            
+            # 1. Checa Data COM no intervalo
+            if data_com and dt_hoje <= data_com <= dt_fim:
+                dias = (data_com - dt_hoje).days
+                prefixo = "🚨 DATA COM HOJE" if dias == 0 else ("⚠️ DATA COM AMANHÃ" if dias == 1 else f"📅 DATA COM EM {dias} DIAS")
                 
-                if dias_restantes == 0:
-                    status_str = f"✅ PAGAMENTO HOJE ({data_pag.strftime('%d/%m/%Y')})"
-                elif dias_restantes == 1:
-                    status_str = f"🗓️ PAGAMENTO AMANHÃ ({data_pag.strftime('%d/%m/%Y')})"
-                else:
-                    status_str = f"💰 PAGAMENTO EM {dias_restantes} DIAS ({data_pag.strftime('%d/%m/%Y')})"
-
-                msg = f"{status_str} - {ticker}\n{icone} Tipo: {tipo_nome}\nValor: R$ {valor}\nDY: {dy_str}"
-                print(f"-> NOTIFICANDO PAGAMENTO: {ticker} ({data_pag.strftime('%d/%m/%Y')})")
+                msg = f"{prefixo} ({data_com.strftime('%d/%m/%Y')}) - {ticker}\n{icone} Tipo: {tipo_nome}\nValor: R$ {valor}"
+                print(f"-> Disparando: {ticker} (Data COM: {data_com})")
                 enviar_ntfy(msg)
+                notificados += 1
 
-except Exception as e:
-    print(f"Erro no rastreamento de pagamentos: {e}")
+            # 2. Checa Data de Pagamento no intervalo
+            if data_pag and dt_hoje <= data_pag <= dt_fim:
+                dias = (data_pag - dt_hoje).days
+                prefixo = "✅ PAGAMENTO HOJE" if dias == 0 else ("🗓️ PAGAMENTO AMANHÃ" if dias == 1 else f"💰 PAGAMENTO EM {dias} DIAS")
+                
+                msg = f"{prefixo} ({data_pag.strftime('%d/%m/%Y')}) - {ticker}\n{icone} Tipo: {tipo_nome}\nValor: R$ {valor}"
+                print(f"-> Disparando: {ticker} (Pagamento: {data_pag})")
+                enviar_ntfy(msg)
+                notificados += 1
 
-print("=== Varredura finalizada ===")
+        print(f"=== Varredura concluída. Total de notificações enviadas: {notificados} ===")
+
+    except Exception as e:
+        print(f"Erro durante a execução do script: {e}")
+
+if __name__ == "__main__":
+    buscar_e_notificar()
+    
