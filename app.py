@@ -28,7 +28,7 @@ TICKERS_B3 = [
 ]
 
 def processar_proventos():
-    print(f"=== Varredura B3 via Yahoo Finance ({dt_hoje.strftime('%d/%m/%Y')} a {dt_fim.strftime('%d/%m/%Y')}) ===")
+    print(f"=== Varredura B3 com Preço e Provento ({dt_hoje.strftime('%d/%m/%Y')} a {dt_fim.strftime('%d/%m/%Y')}) ===")
     notificados = 0
 
     for ticker_symbol in TICKERS_B3:
@@ -36,11 +36,25 @@ def processar_proventos():
         try:
             ticker = yf.Ticker(ticker_symbol)
 
+            # Obtém a cotação atual de mercado da ação
+            preco_atual = None
+            try:
+                # Tenta pegar pelo histórico recente ou info rápida
+                todays_data = ticker.history(period="1d")
+                if not todays_data.empty:
+                    preco_atual = float(todays_data["Close"].iloc[-1])
+                else:
+                    info = ticker.info
+                    preco_atual = float(info.get("currentPrice") or info.get("regularMarketPrice") or 0)
+            except Exception:
+                pass
+
+            preco_str = f"R$ {preco_atual:.2f}" if preco_atual and preco_atual > 0 else "N/D"
+
             # 1. Checagem do Calendário
             try:
                 cal = ticker.calendar
                 if cal is not None:
-                    # Trata o retorno como dicionário ou DataFrame
                     ex_date = None
                     if isinstance(cal, dict) and "Ex-Dividend Date" in cal:
                         ex_date = cal["Ex-Dividend Date"]
@@ -57,7 +71,7 @@ def processar_proventos():
                         if dt_hoje <= data_evt <= dt_fim:
                             dias = (data_evt - dt_hoje).days
                             prefixo = "🚨 DATA COM HOJE" if dias == 0 else ("⚠️ DATA COM AMANHÃ" if dias == 1 else f"📅 DATA COM EM {dias} DIAS")
-                            msg = f"{prefixo} ({data_evt.strftime('%d/%m/%Y')}) - {ticker_clean}\n💵 Tipo: Provento (Calendário)"
+                            msg = f"{prefixo} ({data_evt.strftime('%d/%m/%Y')}) - {ticker_clean}\n💵 Tipo: Provento (Calendário)\n📈 Cotação Atual: {preco_str}"
                             print(f"-> Disparando evento: {ticker_clean}")
                             enviar_ntfy(msg)
                             notificados += 1
@@ -73,9 +87,23 @@ def processar_proventos():
                         dt_div = idx.date() if hasattr(idx, 'date') else idx
                         if dt_hoje <= dt_div <= dt_fim:
                             valor = row["Dividends"]
+                            
+                            # Cálculo da porcentagem do provento em relação ao preço atual (Yield do evento)
+                            if preco_atual and preco_atual > 0:
+                                percentual_dy = (valor / preco_atual) * 100
+                                yield_str = f"{percentual_dy:.2f}%"
+                            else:
+                                yield_str = "N/D"
+
                             dias = (dt_div - dt_hoje).days
                             prefixo = "🚨 DATA COM HOJE" if dias == 0 else ("⚠️ DATA COM AMANHÃ" if dias == 1 else f"📅 DATA COM EM {dias} DIAS")
-                            msg = f"{prefixo} ({dt_div.strftime('%d/%m/%Y')}) - {ticker_clean}\n💵 Tipo: Provento\nValor: R$ {valor:.4f}"
+                            
+                            msg = (
+                                f"{prefixo} ({dt_div.strftime('%d/%m/%Y')}) - {ticker_clean}\n"
+                                f"💵 Valor do Provento: R$ {valor:.4f}\n"
+                                f"📈 Cotação Atual: {preco_str}\n"
+                                f"📊 Yield do Evento: {yield_str}"
+                            )
                             print(f"-> Disparando dividendo: {ticker_clean}")
                             enviar_ntfy(msg)
                             notificados += 1
