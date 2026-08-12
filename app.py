@@ -2,8 +2,9 @@ import os
 import requests
 import pandas as pd
 import yfinance as yf
+from fpdf import FPDF
 
-# Lista completa de Tickers da B3
+# Lista de Tickers da B3
 TICKERS_B3 = [
     "A1MD34.SA", "A2MC34.SA", "AALR3.SA", "AAPL34.SA", "AAZQ11.SA", "ABBV34.SA",
     "ABCB4.SA", "ABCP11.SA", "ABEV3.SA", "ABTT34.SA", "ACCN34.SA", "ACNB34.SA",
@@ -145,20 +146,17 @@ TICKERS_B3 = [
 
 
 def enviar_notificacao_ntfy(titulo, mensagem, prioridade="default", tags=None):
-    """Envia uma notificação HTTP para o servidor do ntfy.sh."""
-    # Lê a variável de ambiente NTFY_TOPIC ou usa um valor padrão
-    topico = os.getenv("NTFY_TOPIC", "Yeild_B3")
+    """Envia uma notificação de texto simples para o ntfy.sh."""
+    topico = os.getenv("NTFY_TOPIC", "seu_topico_secreto")
     url = f"https://ntfy.sh/{topico}"
 
     headers = {
         "Title": titulo,
         "Priority": prioridade
     }
-
     if tags:
         headers["Tags"] = tags
 
-    # Suporte a Token de Acesso caso seu tópico exija autenticação
     ntfy_token = os.getenv("NTFY_TOKEN")
     if ntfy_token:
         headers["Authorization"] = f"Bearer {ntfy_token}"
@@ -166,11 +164,65 @@ def enviar_notificacao_ntfy(titulo, mensagem, prioridade="default", tags=None):
     try:
         response = requests.post(url, data=mensagem.encode('utf-8'), headers=headers, timeout=10)
         response.raise_for_status()
-        print("Notificação enviada com sucesso para o ntfy!")
+        print(f"Notificação enviada com sucesso: {titulo}")
         return True
     except Exception as e:
         print(f"Erro ao enviar notificação para o ntfy: {e}")
         return False
+
+
+def enviar_pdf_ntfy(caminho_pdf, titulo):
+    """Envia um arquivo PDF como anexo para o ntfy.sh (permitindo download)."""
+    topico = os.getenv("NTFY_TOPIC", "seu_topico_secreto")
+    url = f"https://ntfy.sh/{topico}"
+
+    headers = {
+        "Title": titulo,
+        "Filename": os.path.basename(caminho_pdf),
+        "Priority": "high",
+        "Tags": "file,chart_with_upwards_trend"
+    }
+
+    ntfy_token = os.getenv("NTFY_TOKEN")
+    if ntfy_token:
+        headers["Authorization"] = f"Bearer {ntfy_token}"
+
+    try:
+        with open(caminho_pdf, "rb") as arquivo:
+            response = requests.post(url, data=arquivo, headers=headers, timeout=30)
+        response.raise_for_status()
+        print("PDF enviado com sucesso para o ntfy!")
+        return True
+    except Exception as e:
+        print(f"Erro ao enviar arquivo PDF para o ntfy: {e}")
+        return False
+
+
+def gerar_pdf_proventos(df, caminho_saida="resumo_proventos.pdf"):
+    """Gera um relatório em PDF contendo a tabela de proventos."""
+    pdf = FPDF()
+    pdf.add_page()
+    
+    # Cabeçalho
+    pdf.set_font("Helvetica", style="B", size=16)
+    pdf.cell(0, 10, "Resumo de Proventos Declarados", new_x="LMARGIN", new_y="NEXT", align="C")
+    pdf.ln(5)
+
+    # Título das Colunas
+    pdf.set_font("Helvetica", style="B", size=11)
+    pdf.cell(60, 8, "Ticker", border=1, align="C")
+    pdf.cell(60, 8, "Data Com", border=1, align="C")
+    pdf.cell(60, 8, "Valor (R$)", border=1, new_x="LMARGIN", new_y="NEXT", align="C")
+
+    # Linhas da Tabela
+    pdf.set_font("Helvetica", size=10)
+    for _, row in df.iterrows():
+        pdf.cell(60, 8, str(row["Ticker"]), border=1, align="C")
+        pdf.cell(60, 8, str(row["Data Com"]), border=1, align="C")
+        pdf.cell(60, 8, f"R$ {row['Valor (R$)']:.4f}", border=1, new_x="LMARGIN", new_y="NEXT", align="C")
+
+    pdf.output(caminho_saida)
+    return caminho_saida
 
 
 def buscar_proventos(tickers):
@@ -186,10 +238,7 @@ def buscar_proventos(tickers):
             dividends = acao.dividends
 
             if not dividends.empty:
-                # Remove fuso horário para comparar com a data atual
                 dividends.index = dividends.index.tz_localize(None)
-
-                # Filtra os proventos dos últimos 7 dias
                 ultimos_dividends = dividends[dividends.index >= (hoje - pd.Timedelta(days=7))]
 
                 for data, valor in ultimos_dividends.items():
@@ -206,22 +255,21 @@ def buscar_proventos(tickers):
 
 if __name__ == "__main__":
     df_proventos = buscar_proventos(TICKERS_B3)
+    total_proventos = len(df_proventos)
 
-    if not df_proventos.empty:
-        texto_proventos = df_proventos.to_string(index=False)
-        print("\n--- Proventos Encontrados Recentemente ---")
-        print(texto_proventos)
-
-        # Monta e envia a notificação pelo ntfy
-        titulo_notificacao = f"Novos Dividendos! ({len(df_proventos)} detectados)"
-        mensagem_notificacao = f"Proventos identificados nos últimos 7 dias:\n\n{texto_proventos}"
+    if total_proventos > 10:
+        print(f"\nDetectados {total_proventos} proventos (> 10). Gerando PDF...")
+        caminho_pdf = gerar_pdf_proventos(df_proventos)
         
-        enviar_notificacao_ntfy(
-            titulo=titulo_notificacao,
-            mensagem=mensagem_notificacao,
-            prioridade="high",
-            tags="moneybag,chart_with_upwards_trend"
-        )
+        titulo_notificacao = f"Relatorio em PDF: {total_proventos} Proventos Encontrados"
+        enviar_pdf_ntfy(caminho_pdf, titulo=titulo_notificacao)
+
+    elif total_proventos > 0:
+        print(f"\nDetectados {total_proventos} proventos (<= 10). Enviando notificações individuais...")
+        for _, row in df_proventos.iterrows():
+            titulo = f"Provento: {row['Ticker']}"
+            mensagem = f"Ticker: {row['Ticker']}\nData Com: {row['Data Com']}\nValor: R$ {row['Valor (R$)']:.4f}"
+            enviar_notificacao_ntfy(titulo=titulo, mensagem=mensagem, prioridade="default", tags="moneybag")
+
     else:
         print("\nNenhum provento recente encontrado para os tickers da lista.")
-        
