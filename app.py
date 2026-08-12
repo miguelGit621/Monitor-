@@ -1,3 +1,5 @@
+import os
+import requests
 import pandas as pd
 import yfinance as yf
 
@@ -142,6 +144,35 @@ TICKERS_B3 = [
 ]
 
 
+def enviar_notificacao_ntfy(titulo, mensagem, prioridade="default", tags=None):
+    """Envia uma notificação HTTP para o servidor do ntfy.sh."""
+    # Lê a variável de ambiente NTFY_TOPIC ou usa um valor padrão
+    topico = os.getenv("NTFY_TOPIC", "Yeild_B3")
+    url = f"https://ntfy.sh/{topico}"
+
+    headers = {
+        "Title": titulo,
+        "Priority": prioridade
+    }
+
+    if tags:
+        headers["Tags"] = tags
+
+    # Suporte a Token de Acesso caso seu tópico exija autenticação
+    ntfy_token = os.getenv("NTFY_TOKEN")
+    if ntfy_token:
+        headers["Authorization"] = f"Bearer {ntfy_token}"
+
+    try:
+        response = requests.post(url, data=mensagem.encode('utf-8'), headers=headers, timeout=10)
+        response.raise_for_status()
+        print("Notificação enviada com sucesso para o ntfy!")
+        return True
+    except Exception as e:
+        print(f"Erro ao enviar notificação para o ntfy: {e}")
+        return False
+
+
 def buscar_proventos(tickers):
     """Busca proventos declarados recentemente para a lista de tickers."""
     hoje = pd.Timestamp.today().tz_localize(None)
@@ -177,7 +208,20 @@ if __name__ == "__main__":
     df_proventos = buscar_proventos(TICKERS_B3)
 
     if not df_proventos.empty:
+        texto_proventos = df_proventos.to_string(index=False)
         print("\n--- Proventos Encontrados Recentemente ---")
-        print(df_proventos.to_string(index=False))
+        print(texto_proventos)
+
+        # Monta e envia a notificação pelo ntfy
+        titulo_notificacao = f"Novos Dividendos! ({len(df_proventos)} detectados)"
+        mensagem_notificacao = f"Proventos identificados nos últimos 7 dias:\n\n{texto_proventos}"
+        
+        enviar_notificacao_ntfy(
+            titulo=titulo_notificacao,
+            mensagem=mensagem_notificacao,
+            prioridade="high",
+            tags="moneybag,chart_with_upwards_trend"
+        )
     else:
         print("\nNenhum provento recente encontrado para os tickers da lista.")
+        
