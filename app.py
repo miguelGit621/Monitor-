@@ -173,7 +173,7 @@ def enviar_notificacao_ntfy(titulo, mensagem, prioridade="default", tags=None):
 
 def enviar_pdf_ntfy(caminho_pdf, titulo):
     """Envia um arquivo PDF como anexo para o ntfy.sh (permitindo download)."""
-    topico = os.getenv("NTFY_TOPIC", "seu_topico_secreto")
+    topico = os.getenv("NTFY_TOPIC", "Yeild_B3")
     url = f"https://ntfy.sh/{topico}"
 
     headers = {
