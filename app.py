@@ -147,7 +147,7 @@ TICKERS_B3 = [
 
 def enviar_notificacao_ntfy(titulo, mensagem, prioridade="default", tags=None):
     """Envia uma notificação de texto simples para o ntfy.sh."""
-    topico = os.getenv("NTFY_TOPIC", "seu_topico_secreto")
+    topico = os.getenv("NTFY_TOPIC", "Yeild_B3")
     url = f"https://ntfy.sh/{topico}"
 
     headers = {
@@ -208,7 +208,7 @@ def gerar_pdf_proventos(df, caminho_saida="resumo_proventos.pdf"):
     pdf.cell(0, 10, "Resumo de Proventos Declarados", new_x="LMARGIN", new_y="NEXT", align="C")
     pdf.ln(5)
 
-    # Título das Colunas (4 colunas)
+    # Título das Colunas
     pdf.set_font("Helvetica", style="B", size=10)
     pdf.set_fill_color(240, 240, 240)  # Cinza claro para o cabeçalho
     pdf.cell(45, 8, "Ticker", border=1, align="C", fill=True)
@@ -239,9 +239,9 @@ def gerar_pdf_proventos(df, caminho_saida="resumo_proventos.pdf"):
 
 
 def buscar_proventos(tickers):
-    """Busca proventos recentes e identifica se são dividendos extraordinários (DY > 1.30%)."""
-    hoje = pd.Timestamp.today().tz_localize(None)
-    proventos_recentes = []
+    """Busca proventos com Data Com a partir do dia atual e identifica dividendos extraordinários (DY > 1.30%)."""
+    hoje = pd.Timestamp.today().normalize().tz_localize(None)
+    proventos_futuros = []
 
     print(f"Buscando proventos para {len(tickers)} ativos...")
 
@@ -252,9 +252,10 @@ def buscar_proventos(tickers):
 
             if not dividends.empty:
                 dividends.index = dividends.index.tz_localize(None)
-                ultimos_dividends = dividends[dividends.index >= (hoje - pd.Timedelta(days=7))]
+                # Filtra apenas registros do dia atual em diante
+                dividends_filtrados = dividends[dividends.index >= hoje]
 
-                if not ultimos_dividends.empty:
+                if not dividends_filtrados.empty:
                     # Tenta obter a cotação atual do ativo para calcular o DY
                     preco_atual = None
                     try:
@@ -263,16 +264,16 @@ def buscar_proventos(tickers):
                     except Exception:
                         preco_atual = None
 
-                    for data, valor in ultimos_dividends.items():
+                    for data, valor in dividends_filtrados.items():
                         # Cálculo do Dividend Yield (%)
                         if preco_atual and preco_atual > 0:
                             dy = (valor / preco_atual) * 100
                         else:
                             dy = None
 
-                        proventos_recentes.append({
+                        proventos_futuros.append({
                             "Ticker": ticker,
-                            "Data Com": data.strftime("%Y-%m-%d"),
+                            "Data Com": data.strftime("%d/%m"),
                             "Valor (R$)": valor,
                             "Preco Atual (R$)": preco_atual,
                             "DY (%)": dy
@@ -280,7 +281,7 @@ def buscar_proventos(tickers):
         except Exception as e:
             print(f"Erro ao buscar dados do ticker {ticker}: {e}")
 
-    return pd.DataFrame(proventos_recentes)
+    return pd.DataFrame(proventos_futuros)
 
 
 if __name__ == "__main__":
@@ -319,5 +320,4 @@ if __name__ == "__main__":
             enviar_notificacao_ntfy(titulo=titulo, mensagem=mensagem, prioridade="default", tags=tags)
 
     else:
-        print("\nNenhum provento recente encontrado para os tickers da lista.")
-            
+        print("\nNenhum provento futuro ou do dia atual encontrado para os tickers da lista.")
