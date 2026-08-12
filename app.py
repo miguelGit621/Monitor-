@@ -1,7 +1,8 @@
 import pandas as pd
 import yfinance as yf
 
-# TICKERS_B3 = [
+# Lista completa de Tickers da B3
+TICKERS_B3 = [
     "A1MD34.SA", "A2MC34.SA", "AALR3.SA", "AAPL34.SA", "AAZQ11.SA", "ABBV34.SA",
     "ABCB4.SA", "ABCP11.SA", "ABEV3.SA", "ABTT34.SA", "ACCN34.SA", "ACNB34.SA",
     "ADBE34.SA", "ADPR34.SA", "ADSK34.SA", "AEXA34.SA", "AFGB34.SA", "AFHI11.SA",
@@ -141,95 +142,42 @@ import yfinance as yf
 ]
 
 
-def dividir_em_lotes(lista, tamanho_lote=50):
-    """Divide a lista de tickers em blocos menores para evitar bloqueio por IP."""
-    for i in range(0, len(lista), tamanho_lote):
-        yield lista[i : i + tamanho_lote]
+def buscar_proventos(tickers):
+    """Busca proventos declarados recentemente para a lista de tickers."""
+    hoje = pd.Timestamp.today().tz_localize(None)
+    proventos_recentes = []
 
+    print(f"Buscando proventos para {len(tickers)} ativos...")
 
-def buscar_dados_e_proventos(tickers):
-    proventos_encontrados = []
-    e_erros = 0
-
-    print(
-        f"Iniciando verificação de {len(tickers)} ativos em lotes de 50..."
-    )
-
-    for lote in dividir_em_lotes(tickers, tamanho_lote=50):
+    for ticker in tickers:
         try:
-            # actions=True é OBRIGATÓRIO para trazer Dividendos e JCP
-            dados = yf.download(
-                tickers=lote,
-                period="5d",
-                group_by="ticker",
-                actions=True,  # Habilita histórico de proventos
-                threads=True,
-                progress=False,
-            )
+            acao = yf.Ticker(ticker)
+            dividends = acao.dividends
 
-            for ticker in lote:
-                try:
-                    #Trata o caso do yfinance retornar DataFrame simples ou MultiIndex
-                    if len(lote) == 1:
-                        df_ticker = dados
-                    else:
-                        if ticker not in dados.columns.levels[0]:
-                            continue
-                        df_ticker = dados[ticker]
+            if not dividends.empty:
+                # Remove fuso horário para comparar com a data atual
+                dividends.index = dividends.index.tz_localize(None)
 
-                    if df_ticker.empty:
-                        continue
+                # Filtra os proventos dos últimos 7 dias
+                ultimos_dividends = dividends[dividends.index >= (hoje - pd.Timedelta(days=7))]
 
-                    # Verifica se houve pagamento de Dividendos nos últimos dias
-                    if (
-                        "Dividends" in df_ticker.columns
-                        and df_ticker["Dividends"].sum() > 0
-                    ):
-                        dias_com_dividendo = df_ticker[
-                            df_ticker["Dividends"] > 0
-                        ]
+                for data, valor in ultimos_dividends.items():
+                    proventos_recentes.append({
+                        "Ticker": ticker,
+                        "Data Com": data.strftime("%Y-%m-%d"),
+                        "Valor (R$)": valor
+                    })
+        except Exception as e:
+            print(f"Erro ao buscar dados do ticker {ticker}: {e}")
 
-                        for data, linha in dias_com_dividendo.iterrows():
-                            valor = linha["Dividends"]
-                            cotacao = (
-                                linha["Close"] if "Close" in linha else 0.0
-                            )
-
-                            proventos_encontrados.append(
-                                {
-                                    "ticker": ticker.replace(".SA", ""),
-                                    "valor": round(float(valor), 4),
-                                    "cotacao": round(float(cotacao), 2),
-                                    "data": data.strftime("%Y-%m-%d"),
-                                }
-                            )
-
-                except Exception as err_ticker:
-                    e_erros += 1
-                    continue
-
-        except Exception as err_lote:
-            print(f"Erro ao baixar lote: {err_lote}")
-            continue
-
-    print(
-        f"Verificação concluída! {len(proventos_encontrados)} proventos identificados."
-    )
-    return proventos_encontrados
+    return pd.DataFrame(proventos_recentes)
 
 
 if __name__ == "__main__":
-    notificacoes = buscar_dados_e_proventos(TICKERS_B3)
+    df_proventos = buscar_proventos(TICKERS_B3)
 
-    if notificacoes:
-        print("Enviando notificações...")
-        # Insira aqui sua função de envio (Telegram, Discord, E-mail, etc.)
-        for item in notificacoes:
-            print(
-                f"📢 {item['ticker']}: R$ {item['valor']} em {item['data']}"
-            )
+    if not df_proventos.empty:
+        print("\n--- Proventos Encontrados Recentemente ---")
+        print(df_proventos.to_string(index=False))
     else:
-        print(
-            "Nenhum provento anunciado nos últimos dias para a lista de ativos."
-        )
-        
+        print("\nNenhum provento recente encontrado para os tickers da lista.")
