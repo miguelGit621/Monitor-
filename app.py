@@ -199,7 +199,7 @@ def enviar_pdf_ntfy(caminho_pdf, titulo):
 
 
 def gerar_pdf_proventos(df, caminho_saida="resumo_proventos.pdf"):
-    """Gera um relatório em PDF contendo a tabela de proventos com DY (%) incluído."""
+    """Gera um relatório em PDF destacando linhas em verde se DY > 1,30% (Dividendo Extraordinário)."""
     pdf = FPDF()
     pdf.add_page()
     
@@ -210,27 +210,36 @@ def gerar_pdf_proventos(df, caminho_saida="resumo_proventos.pdf"):
 
     # Título das Colunas (4 colunas)
     pdf.set_font("Helvetica", style="B", size=10)
-    pdf.cell(45, 8, "Ticker", border=1, align="C")
-    pdf.cell(45, 8, "Data Com", border=1, align="C")
-    pdf.cell(45, 8, "Valor (R$)", border=1, align="C")
-    pdf.cell(45, 8, "DY (%)", border=1, new_x="LMARGIN", new_y="NEXT", align="C")
+    pdf.set_fill_color(240, 240, 240)  # Cinza claro para o cabeçalho
+    pdf.cell(45, 8, "Ticker", border=1, align="C", fill=True)
+    pdf.cell(45, 8, "Data Com", border=1, align="C", fill=True)
+    pdf.cell(45, 8, "Valor (R$)", border=1, align="C", fill=True)
+    pdf.cell(45, 8, "DY (%)", border=1, new_x="LMARGIN", new_y="NEXT", align="C", fill=True)
 
     # Linhas da Tabela
     pdf.set_font("Helvetica", size=9)
     for _, row in df.iterrows():
-        pdf.cell(45, 8, str(row["Ticker"]), border=1, align="C")
-        pdf.cell(45, 8, str(row["Data Com"]), border=1, align="C")
-        pdf.cell(45, 8, f"R$ {row['Valor (R$)']:.4f}", border=1, align="C")
-        
-        dy_str = f"{row['DY (%)']:.2f}%" if pd.notnull(row['DY (%)']) else "N/A"
-        pdf.cell(45, 8, dy_str, border=1, new_x="LMARGIN", new_y="NEXT", align="C")
+        dy_valor = row['DY (%)']
+        eh_extraordinario = pd.notnull(dy_valor) and dy_valor > 1.30
+
+        if eh_extraordinario:
+            pdf.set_fill_color(200, 247, 197)  # Verde claro para Dividendo Extraordinário
+            dy_str = f"{dy_valor:.2f}% (Extra)"
+        else:
+            pdf.set_fill_color(255, 255, 255)  # Branco padrão
+            dy_str = f"{dy_valor:.2f}%" if pd.notnull(dy_valor) else "N/A"
+
+        pdf.cell(45, 8, str(row["Ticker"]), border=1, align="C", fill=True)
+        pdf.cell(45, 8, str(row["Data Com"]), border=1, align="C", fill=True)
+        pdf.cell(45, 8, f"R$ {row['Valor (R$)']:.4f}", border=1, align="C", fill=True)
+        pdf.cell(45, 8, dy_str, border=1, new_x="LMARGIN", new_y="NEXT", align="C", fill=True)
 
     pdf.output(caminho_saida)
     return caminho_saida
 
 
 def buscar_proventos(tickers):
-    """Busca proventos recentes e calcula o DY (%) correspondente com base no preço atual."""
+    """Busca proventos recentes e identifica se são dividendos extraordinários (DY > 1.30%)."""
     hoje = pd.Timestamp.today().tz_localize(None)
     proventos_recentes = []
 
@@ -288,17 +297,27 @@ if __name__ == "__main__":
     elif total_proventos > 0:
         print(f"\nDetectados {total_proventos} proventos (<= 10). Enviando notificações individuais...")
         for _, row in df_proventos.iterrows():
+            dy_valor = row['DY (%)']
+            eh_extraordinario = pd.notnull(dy_valor) and dy_valor > 1.30
+
             titulo = f"Provento: {row['Ticker']}"
-            
-            dy_texto = f"{row['DY (%)']:.2f}%" if pd.notnull(row['DY (%)']) else "N/A"
+            if eh_extraordinario:
+                titulo += " [Dividendo Extraordinario]"
+
+            dy_texto = f"{dy_valor:.2f}%" if pd.notnull(dy_valor) else "N/A"
+            if eh_extraordinario:
+                dy_texto += " (Extraordinario)"
+
             mensagem = (
                 f"Ticker: {row['Ticker']}\n"
                 f"Data Com: {row['Data Com']}\n"
                 f"Valor: R$ {row['Valor (R$)']:.4f}\n"
                 f"DY Estimado: {dy_texto}"
             )
-            enviar_notificacao_ntfy(titulo=titulo, mensagem=mensagem, prioridade="default", tags="moneybag")
+            
+            tags = "star,moneybag" if eh_extraordinario else "moneybag"
+            enviar_notificacao_ntfy(titulo=titulo, mensagem=mensagem, prioridade="default", tags=tags)
 
     else:
         print("\nNenhum provento recente encontrado para os tickers da lista.")
-                    
+            
