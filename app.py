@@ -172,7 +172,7 @@ def enviar_notificacao_ntfy(titulo, mensagem, prioridade="default", tags=None):
 
 
 def enviar_pdf_ntfy(caminho_pdf, titulo):
-    """Envia um arquivo PDF como anexo para o ntfy.sh (permitindo download)."""
+    """Envia um arquivo PDF como anexo para o ntfy.sh."""
     topico = os.getenv("NTFY_TOPIC", "Yeild_B3")
     url = f"https://ntfy.sh/{topico}"
 
@@ -199,7 +199,7 @@ def enviar_pdf_ntfy(caminho_pdf, titulo):
 
 
 def gerar_pdf_proventos(df, caminho_saida="resumo_proventos.pdf"):
-    """Gera um relatório em PDF contendo a tabela de proventos."""
+    """Gera um relatório em PDF contendo a tabela de proventos com DY (%) incluído."""
     pdf = FPDF()
     pdf.add_page()
     
@@ -208,25 +208,29 @@ def gerar_pdf_proventos(df, caminho_saida="resumo_proventos.pdf"):
     pdf.cell(0, 10, "Resumo de Proventos Declarados", new_x="LMARGIN", new_y="NEXT", align="C")
     pdf.ln(5)
 
-    # Título das Colunas
-    pdf.set_font("Helvetica", style="B", size=11)
-    pdf.cell(60, 8, "Ticker", border=1, align="C")
-    pdf.cell(60, 8, "Data Com", border=1, align="C")
-    pdf.cell(60, 8, "Valor (R$)", border=1, new_x="LMARGIN", new_y="NEXT", align="C")
+    # Título das Colunas (4 colunas)
+    pdf.set_font("Helvetica", style="B", size=10)
+    pdf.cell(45, 8, "Ticker", border=1, align="C")
+    pdf.cell(45, 8, "Data Com", border=1, align="C")
+    pdf.cell(45, 8, "Valor (R$)", border=1, align="C")
+    pdf.cell(45, 8, "DY (%)", border=1, new_x="LMARGIN", new_y="NEXT", align="C")
 
     # Linhas da Tabela
-    pdf.set_font("Helvetica", size=10)
+    pdf.set_font("Helvetica", size=9)
     for _, row in df.iterrows():
-        pdf.cell(60, 8, str(row["Ticker"]), border=1, align="C")
-        pdf.cell(60, 8, str(row["Data Com"]), border=1, align="C")
-        pdf.cell(60, 8, f"R$ {row['Valor (R$)']:.4f}", border=1, new_x="LMARGIN", new_y="NEXT", align="C")
+        pdf.cell(45, 8, str(row["Ticker"]), border=1, align="C")
+        pdf.cell(45, 8, str(row["Data Com"]), border=1, align="C")
+        pdf.cell(45, 8, f"R$ {row['Valor (R$)']:.4f}", border=1, align="C")
+        
+        dy_str = f"{row['DY (%)']:.2f}%" if pd.notnull(row['DY (%)']) else "N/A"
+        pdf.cell(45, 8, dy_str, border=1, new_x="LMARGIN", new_y="NEXT", align="C")
 
     pdf.output(caminho_saida)
     return caminho_saida
 
 
 def buscar_proventos(tickers):
-    """Busca proventos declarados recentemente para a lista de tickers."""
+    """Busca proventos recentes e calcula o DY (%) correspondente com base no preço atual."""
     hoje = pd.Timestamp.today().tz_localize(None)
     proventos_recentes = []
 
@@ -241,12 +245,29 @@ def buscar_proventos(tickers):
                 dividends.index = dividends.index.tz_localize(None)
                 ultimos_dividends = dividends[dividends.index >= (hoje - pd.Timedelta(days=7))]
 
-                for data, valor in ultimos_dividends.items():
-                    proventos_recentes.append({
-                        "Ticker": ticker,
-                        "Data Com": data.strftime("%Y-%m-%d"),
-                        "Valor (R$)": valor
-                    })
+                if not ultimos_dividends.empty:
+                    # Tenta obter a cotação atual do ativo para calcular o DY
+                    preco_atual = None
+                    try:
+                        info = acao.fast_info
+                        preco_atual = info.get('lastPrice') or info.get('previousClose')
+                    except Exception:
+                        preco_atual = None
+
+                    for data, valor in ultimos_dividends.items():
+                        # Cálculo do Dividend Yield (%)
+                        if preco_atual and preco_atual > 0:
+                            dy = (valor / preco_atual) * 100
+                        else:
+                            dy = None
+
+                        proventos_recentes.append({
+                            "Ticker": ticker,
+                            "Data Com": data.strftime("%Y-%m-%d"),
+                            "Valor (R$)": valor,
+                            "Preco Atual (R$)": preco_atual,
+                            "DY (%)": dy
+                        })
         except Exception as e:
             print(f"Erro ao buscar dados do ticker {ticker}: {e}")
 
@@ -268,8 +289,16 @@ if __name__ == "__main__":
         print(f"\nDetectados {total_proventos} proventos (<= 10). Enviando notificações individuais...")
         for _, row in df_proventos.iterrows():
             titulo = f"Provento: {row['Ticker']}"
-            mensagem = f"Ticker: {row['Ticker']}\nData Com: {row['Data Com']}\nValor: R$ {row['Valor (R$)']:.4f}"
+            
+            dy_texto = f"{row['DY (%)']:.2f}%" if pd.notnull(row['DY (%)']) else "N/A"
+            mensagem = (
+                f"Ticker: {row['Ticker']}\n"
+                f"Data Com: {row['Data Com']}\n"
+                f"Valor: R$ {row['Valor (R$)']:.4f}\n"
+                f"DY Estimado: {dy_texto}"
+            )
             enviar_notificacao_ntfy(titulo=titulo, mensagem=mensagem, prioridade="default", tags="moneybag")
 
     else:
         print("\nNenhum provento recente encontrado para os tickers da lista.")
+                    
