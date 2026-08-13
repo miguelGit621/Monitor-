@@ -1,20 +1,21 @@
-name: Monitor de Proventos B3
+name: Monitor de Proventos (BRAPI)
 
 on:
   schedule:
-    # Roda todos os dias às 09:00 UTC (06:00 horário de Brasília)
+    # 09:00 UTC corresponde às 06:00 no horário de Brasília
+    # Executa todos os dias (domingo a sábado)
     - cron: '0 9 * * *'
-  workflow_dispatch: # Permite rodar manualmente na aba Actions
+  workflow_dispatch: # Mantém a opção de você rodar manualmente pelo site do GitHub quando quiser
 
 jobs:
-  build:
+  monitorar-proventos:
     runs-on: ubuntu-latest
 
     steps:
-      - name: Checkout do código
+      - name: Checkout do Código
         uses: actions/checkout@v4
 
-      - name: Configurar o Python
+      - name: Configurar Python
         uses: actions/setup-python@v5
         with:
           python-version: '3.10'
@@ -22,9 +23,12 @@ jobs:
       - name: Instalar Dependências
         run: |
           python -m pip install --upgrade pip
-          pip install -r requirements.txt
+          pip install pandas requests fpdf
 
-      - name: Executar Script de Monitoramento
-        run: |
-          python app.py
-          
+      - name: Executar Monitoramento (BRAPI)
+        env:
+          NTFY_TOPIC: ${{ secrets.NTFY_TOPIC }}
+          NTFY_TOKEN: ${{ secrets.NTFY_TOKEN }}
+          BRAPI_TOKEN: ${{ secrets.BRAPI_TOKEN }}
+        run: python app.py
+        
