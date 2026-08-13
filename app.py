@@ -3,7 +3,7 @@ import requests
 import pandas as pd
 from pandas.tseries.offsets import BDay
 
-# Lista de Tickers (coloque o restante da sua lista aqui)
+# Lista de Tickers
 TICKERS_B3 = ["A1MD34.SA", "A2MC34.SA", "AALR3.SA", "AAPL34.SA", "AAZQ11.SA", "ABBV34.SA",
     "ABCB4.SA", "ABCP11.SA", "ABEV3.SA", "ABTT34.SA", "ACCN34.SA", "ACNB34.SA",
     "ADBE34.SA", "ADPR34.SA", "ADSK34.SA", "AEXA34.SA", "AFGB34.SA", "AFHI11.SA",
@@ -140,51 +140,55 @@ TICKERS_B3 = ["A1MD34.SA", "A2MC34.SA", "AALR3.SA", "AAPL34.SA", "AAZQ11.SA", "A
     "WFCB34.SA", "WHGR11.SA", "WHRL3.SA", "WHRL4.SA", "WIZC3.SA", "WLMM3.SA",
     "WLMM4.SA", "WMBR34.SA", "WMTB34.SA", "WSTB34.SA", "WTSP11.SA", "XINA11.SA",
     "XMAL11.SA", "XPIN11.SA", "XPLG11.SA", "XPML11.SA", "XPSF11.SA", "ZAMP3.SA"
-     ]
+]
 
 def enviar_notificacao_ntfy(titulo, mensagem, prioridade="default", tags=None):
     """Envia notificação para o tópico Yeild_B3 via ntfy.sh"""
-    topico = "Yeild_B3" 
+    topico = "Yeild_B3"
     url = f"https://ntfy.sh/{topico}"
-    
-    headers = {
-        "Title": titulo,
-        "Priority": prioridade
-    }
-    if tags:
-        headers["Tags"] = tags
-    
-    # Se você tiver um token de acesso para o ntfy (opcional)
+    headers = {"Title": titulo, "Priority": prioridade}
+    if tags: headers["Tags"] = tags
     token = os.getenv("NTFY_TOKEN")
-    if token:
-        headers["Authorization"] = f"Bearer {token}"
-
+    if token: headers["Authorization"] = f"Bearer {token}"
+    
     try:
-        response = requests.post(url, data=mensagem.encode('utf-8'), headers=headers, timeout=10)
-        response.raise_for_status()
+        requests.post(url, data=mensagem.encode('utf-8'), headers=headers, timeout=10)
     except Exception as e:
         print(f"Erro ao enviar notificação: {e}")
 
-# ... (Mantenha aqui a sua função buscar_proventos_brapi_lote) ...
+def buscar_proventos_brapi_lote(tickers, token_brapi=None):
+    """Busca proventos futuros na BRAPI."""
+    hoje = pd.Timestamp.today().normalize()
+    proventos_futuros = []
+    tickers_limpos = list(set([t.replace(".SA", "") for t in tickers]))
+    
+    # Lotes de 5 para evitar erro 400
+    tamanho_lote = 5
+    lotes = [tickers_limpos[i : i + tamanho_lote] for i in range(0, len(tickers_limpos), tamanho_lote)]
+    
+    headers = {"Authorization": f"Bearer {token_brapi}"} if token_brapi else {}
+
+    for lote in lotes:
+        url = f"https://brapi.dev/api/quote/{','.join(lote)}?dividends=true"
+        try:
+            res = requests.get(url, headers=headers, timeout=15)
+            if res.status_code == 200:
+                for acao in res.json().get("results", []):
+                    for item in acao.get("dividendsData", {}).get("cashDividends", []):
+                        data_com = pd.to_datetime(item.get("cutOffDate")).tz_localize(None)
+                        if (data_com + BDay(1)) >= hoje:
+                            proventos_futuros.append(f"{acao.get('symbol')}: {item.get('label')} - R$ {item.get('rate')}")
+        except Exception: continue
+    return proventos_futuros
 
 if __name__ == "__main__":
-    # Executa a busca
     token = os.getenv("BRAPI_TOKEN")
-    df = buscar_proventos_brapi_lote(TICKERS_B3, token)
+    resultados = buscar_proventos_brapi_lote(TICKERS_B3, token)
     
-    if not df.empty:
-        # Cria uma mensagem resumida
-        total = len(df)
-        msg = f"Foram encontrados {total} novos eventos de proventos (JCP/Dividendos/Amortizações)."
-        
-        # Envia a notificação
-        enviar_notificacao_ntfy(
-            titulo="🔔 Proventos B3 Encontrados",
-            mensagem=msg,
-            prioridade="default",
-            tags="moneybag"
-        )
-        print("Notificação enviada com sucesso!")
+    if resultados:
+        msg = "\n".join(resultados)
+        enviar_notificacao_ntfy("Proventos Detectados", msg, tags="moneybag")
+        print("Notificação enviada!")
     else:
-        print("Nenhum provento encontrado hoje.")
+        print("Nenhum provento para hoje.")
         
