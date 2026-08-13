@@ -207,17 +207,18 @@ def gerar_pdf_proventos(df, caminho_saida="resumo_proventos.pdf"):
     pdf.cell(0, 10, "Resumo de Proventos Declarados", new_x="LMARGIN", new_y="NEXT", align="C")
     pdf.ln(5)
 
-    # Título das Colunas (Ajuste de Larguras para caber na página A4 de 190mm úteis)
-    pdf.set_font("Helvetica", style="B", size=10)
+    # Título das Colunas
+    pdf.set_font("Helvetica", style="B", size=9)
     pdf.set_fill_color(240, 240, 240)
-    pdf.cell(35, 8, "Ticker", border=1, align="C", fill=True)
-    pdf.cell(30, 8, "Data EX", border=1, align="C", fill=True)
-    pdf.cell(35, 8, "Pagamento", border=1, align="C", fill=True)
-    pdf.cell(45, 8, "Valor (R$)", border=1, align="C", fill=True)
-    pdf.cell(45, 8, "DY (%)", border=1, new_x="LMARGIN", new_y="NEXT", align="C", fill=True)
+    pdf.cell(28, 8, "Ticker", border=1, align="C", fill=True)
+    pdf.cell(28, 8, "Tipo", border=1, align="C", fill=True)
+    pdf.cell(25, 8, "Data EX", border=1, align="C", fill=True)
+    pdf.cell(28, 8, "Pagamento", border=1, align="C", fill=True)
+    pdf.cell(40, 8, "Valor (R$)", border=1, align="C", fill=True)
+    pdf.cell(40, 8, "DY (%)", border=1, new_x="LMARGIN", new_y="NEXT", align="C", fill=True)
 
     # Linhas da Tabela
-    pdf.set_font("Helvetica", size=9)
+    pdf.set_font("Helvetica", size=8)
     for _, row in df.iterrows():
         dy_valor = row['DY (%)']
         eh_extraordinario = pd.notnull(dy_valor) and dy_valor > 1.30
@@ -226,24 +227,22 @@ def gerar_pdf_proventos(df, caminho_saida="resumo_proventos.pdf"):
             pdf.set_fill_color(200, 247, 197)  # Verde claro para Dividendo Extraordinário
             dy_str = f"{dy_valor:.2f}% (Extra)"
         else:
-            pdf.set_fill_color(255, 255, 255)  # Branco padrão
+            pdf.set_fill_color(255, 255, 255)
             dy_str = f"{dy_valor:.2f}%" if pd.notnull(dy_valor) else "N/A"
 
-        pdf.cell(35, 8, str(row["Ticker"]), border=1, align="C", fill=True)
-        pdf.cell(30, 8, str(row["Data EX"]), border=1, align="C", fill=True)
-        pdf.cell(35, 8, str(row["Data Pagamento"]), border=1, align="C", fill=True)
-        pdf.cell(45, 8, f"R$ {row['Valor (R$)']:.4f}", border=1, align="C", fill=True)
-        pdf.cell(45, 8, dy_str, border=1, new_x="LMARGIN", new_y="NEXT", align="C", fill=True)
+        pdf.cell(28, 8, str(row["Ticker"]), border=1, align="C", fill=True)
+        pdf.cell(28, 8, str(row["Tipo"])[:12], border=1, align="C", fill=True)
+        pdf.cell(25, 8, str(row["Data EX"]), border=1, align="C", fill=True)
+        pdf.cell(28, 8, str(row["Data Pagamento"]), border=1, align="C", fill=True)
+        pdf.cell(40, 8, f"R$ {row['Valor (R$)']:.4f}", border=1, align="C", fill=True)
+        pdf.cell(40, 8, dy_str, border=1, new_x="LMARGIN", new_y="NEXT", align="C", fill=True)
 
     pdf.output(caminho_saida)
     return caminho_saida
 
 
 def buscar_proventos_brapi_lote(tickers, token_brapi=None):
-    """
-    Busca proventos futuros na BRAPI dividindo a lista em lotes.
-    Filtra datas EX e Pagamento para garantir que sejam em dias úteis (Seg-Sex).
-    """
+    """Busca proventos futuros na BRAPI dividindo a lista em lotes com tolerância a falhas."""
     hoje = pd.Timestamp.today().normalize()
     proventos_futuros = []
 
@@ -254,18 +253,21 @@ def buscar_proventos_brapi_lote(tickers, token_brapi=None):
         for i in range(0, len(tickers_limpos), tamanho_lote)
     ]
 
-    print(f"Buscando proventos para {len(tickers_limpos)} ativos em {len(lotes)} requisições (BRAPI)...")
+    headers = {}
+    if token_brapi:
+        headers["Authorization"] = f"Bearer {token_brapi}"
+
+    print(f"Buscando proventos para {len(tickers_limpos)} ativos em {len(lotes)} lotes...")
 
     for lote in lotes:
         tickers_str = ",".join(lote)
         url = f"https://brapi.dev/api/quote/{tickers_str}?dividends=true"
-        if token_brapi:
-            url += f"&token={token_brapi}"
 
         try:
-            res = requests.get(url, timeout=15)
+            res = requests.get(url, headers=headers, timeout=15)
+            
             if res.status_code != 200:
-                print(f"Erro no lote ({res.status_code}): {tickers_str}")
+                print(f"Aviso: Lote retornou status {res.status_code} para: {tickers_str}")
                 continue
 
             dados = res.json()
@@ -275,48 +277,53 @@ def buscar_proventos_brapi_lote(tickers, token_brapi=None):
                 ticker_full = f"{acao.get('symbol')}.SA"
                 preco_atual = acao.get("regularMarketPrice")
 
-                cash_dividends = acao.get("dividendsData", {}).get("cashDividends", [])
+                dividends_data = acao.get("dividendsData", {})
+                cash_dividends = dividends_data.get("cashDividends", []) if dividends_data else []
+
+                if not cash_dividends:
+                    continue
 
                 for item in cash_dividends:
                     data_com_str = item.get("cutOffDate") or item.get("approvedOn")
                     data_pag_str = item.get("paymentDate")
 
-                    if not data_com_str or not data_pag_str:
+                    if not data_com_str:
                         continue
 
-                    # Converte para Timestamp
-                    data_com = pd.to_datetime(data_com_str).tz_localize(None)
-                    data_pag = pd.to_datetime(data_pag_str).tz_localize(None)
+                    try:
+                        data_com = pd.to_datetime(data_com_str).tz_localize(None)
+                        
+                        if data_pag_str:
+                            data_pag = pd.to_datetime(data_pag_str).tz_localize(None)
+                        else:
+                            data_pag = data_com + BDay(15)
 
-                    # Calcula a Data EX como o próximo dia útil após a Data Com (BDay = Business Day)
-                    data_ex = data_com + BDay(1)
+                        data_ex = data_com + BDay(1)
 
-                    # Filtra do dia atual em diante
-                    if data_ex >= hoje:
-                        # Verifica se Data EX e Data Pagamento são dias úteis (Segunda a Sexta = 0 a 4)
-                        if data_ex.weekday() < 5 and data_pag.weekday() < 5:
-                            
-                            valor = item.get("rate", 0)
-                            dy = ((valor / preco_atual) * 100) if preco_atual and preco_atual > 0 else None
+                        if data_ex >= hoje:
+                            if data_ex.weekday() < 5 and data_pag.weekday() < 5:
+                                valor = item.get("rate", 0)
+                                dy = ((valor / preco_atual) * 100) if preco_atual and preco_atual > 0 else None
 
-                            proventos_futuros.append({
-                                "Ticker": ticker_full,
-                                "Tipo": item.get("label", "Provento"),
-                                "Data EX": data_ex.strftime("%d/%m"),
-                                "Data Pagamento": data_pag.strftime("%d/%m"),
-                                "Valor (R$)": valor,
-                                "Preco Atual (R$)": preco_atual,
-                                "DY (%)": dy,
-                            })
+                                proventos_futuros.append({
+                                    "Ticker": ticker_full,
+                                    "Tipo": item.get("label", "Provento"),
+                                    "Data EX": data_ex.strftime("%d/%m"),
+                                    "Data Pagamento": data_pag.strftime("%d/%m"),
+                                    "Valor (R$)": valor,
+                                    "Preco Atual (R$)": preco_atual,
+                                    "DY (%)": dy,
+                                })
+                    except Exception:
+                        continue
 
         except Exception as e:
-            print(f"Erro ao processar lote {tickers_str}: {e}")
+            print(f"Erro de conexão ao processar lote: {e}")
 
     return pd.DataFrame(proventos_futuros)
 
 
 if __name__ == "__main__":
-    # Token Opcional BRAPI (Pegue em brapi.dev caso bata limites de API)
     token = os.getenv("BRAPI_TOKEN", None)
     
     df_proventos = buscar_proventos_brapi_lote(TICKERS_B3, token)
@@ -337,7 +344,7 @@ if __name__ == "__main__":
 
             titulo = f"{row['Tipo']}: {row['Ticker']}"
             if eh_extraordinario:
-                titulo += " [Dividendo Extraordinario]"
+                titulo += " [Extraordinario]"
 
             dy_texto = f"{dy_valor:.2f}%" if pd.notnull(dy_valor) else "N/A"
             if eh_extraordinario:
@@ -345,6 +352,7 @@ if __name__ == "__main__":
 
             mensagem = (
                 f"Ticker: {row['Ticker']}\n"
+                f"Tipo: {row['Tipo']}\n"
                 f"Data EX: {row['Data EX']}\n"
                 f"Pagamento: {row['Data Pagamento']}\n"
                 f"Valor: R$ {row['Valor (R$)']:.4f}\n"
