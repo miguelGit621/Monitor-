@@ -1,5 +1,5 @@
 import os
-import requirements
+import requests
 import pandas as pd
 from pandas.tseries.offsets import BDay
 
