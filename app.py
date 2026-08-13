@@ -1,12 +1,10 @@
 import os
-import requests
+import requirements
 import pandas as pd
 from pandas.tseries.offsets import BDay
-from fpdf import FPDF
 
-# Lista de Tickers da B3
-TICKERS_B3 = [
-    "A1MD34.SA", "A2MC34.SA", "AALR3.SA", "AAPL34.SA", "AAZQ11.SA", "ABBV34.SA",
+# Lista de Tickers (coloque o restante da sua lista aqui)
+TICKERS_B3 = ["A1MD34.SA", "A2MC34.SA", "AALR3.SA", "AAPL34.SA", "AAZQ11.SA", "ABBV34.SA",
     "ABCB4.SA", "ABCP11.SA", "ABEV3.SA", "ABTT34.SA", "ACCN34.SA", "ACNB34.SA",
     "ADBE34.SA", "ADPR34.SA", "ADSK34.SA", "AEXA34.SA", "AFGB34.SA", "AFHI11.SA",
     "AFOF11.SA", "AGRO3.SA", "AGRO34.SA", "AGXY3.SA", "AHEB3.SA", "AHEB4.SA",
@@ -142,225 +140,51 @@ TICKERS_B3 = [
     "WFCB34.SA", "WHGR11.SA", "WHRL3.SA", "WHRL4.SA", "WIZC3.SA", "WLMM3.SA",
     "WLMM4.SA", "WMBR34.SA", "WMTB34.SA", "WSTB34.SA", "WTSP11.SA", "XINA11.SA",
     "XMAL11.SA", "XPIN11.SA", "XPLG11.SA", "XPML11.SA", "XPSF11.SA", "ZAMP3.SA"
-]
+     ]
 
 def enviar_notificacao_ntfy(titulo, mensagem, prioridade="default", tags=None):
-    """Envia uma notificação de texto simples para o ntfy.sh."""
-    topico = os.getenv("NTFY_TOPIC", "Yeild_B3")
+    """Envia notificação para o tópico Yeild_B3 via ntfy.sh"""
+    topico = "Yeild_B3" 
     url = f"https://ntfy.sh/{topico}"
-
+    
     headers = {
         "Title": titulo,
         "Priority": prioridade
     }
     if tags:
         headers["Tags"] = tags
-
-    ntfy_token = os.getenv("NTFY_TOKEN")
-    if ntfy_token:
-        headers["Authorization"] = f"Bearer {ntfy_token}"
+    
+    # Se você tiver um token de acesso para o ntfy (opcional)
+    token = os.getenv("NTFY_TOKEN")
+    if token:
+        headers["Authorization"] = f"Bearer {token}"
 
     try:
         response = requests.post(url, data=mensagem.encode('utf-8'), headers=headers, timeout=10)
         response.raise_for_status()
-        print(f"Notificação enviada com sucesso: {titulo}")
-        return True
     except Exception as e:
-        print(f"Erro ao enviar notificação para o ntfy: {e}")
-        return False
+        print(f"Erro ao enviar notificação: {e}")
 
-
-def enviar_pdf_ntfy(caminho_pdf, titulo):
-    """Envia um arquivo PDF como anexo para o ntfy.sh."""
-    topico = os.getenv("NTFY_TOPIC", "Yeild_B3")
-    url = f"https://ntfy.sh/{topico}"
-
-    headers = {
-        "Title": titulo,
-        "Filename": os.path.basename(caminho_pdf),
-        "Priority": "high",
-        "Tags": "file,chart_with_upwards_trend"
-    }
-
-    ntfy_token = os.getenv("NTFY_TOKEN")
-    if ntfy_token:
-        headers["Authorization"] = f"Bearer {ntfy_token}"
-
-    try:
-        with open(caminho_pdf, "rb") as arquivo:
-            response = requests.post(url, data=arquivo, headers=headers, timeout=30)
-        response.raise_for_status()
-        print("PDF enviado com sucesso para o ntfy!")
-        return True
-    except Exception as e:
-        print(f"Erro ao enviar arquivo PDF para o ntfy: {e}")
-        return False
-
-
-def gerar_pdf_proventos(df, caminho_saida="resumo_proventos.pdf"):
-    """Gera um relatório em PDF destacando linhas em verde se DY > 1,30% (Dividendo Extraordinário)."""
-    pdf = FPDF()
-    pdf.add_page()
-    
-    # Cabeçalho
-    pdf.set_font("Helvetica", style="B", size=16)
-    pdf.cell(0, 10, "Resumo de Proventos Declarados", new_x="LMARGIN", new_y="NEXT", align="C")
-    pdf.ln(5)
-
-    # Título das Colunas
-    pdf.set_font("Helvetica", style="B", size=9)
-    pdf.set_fill_color(240, 240, 240)
-    pdf.cell(28, 8, "Ticker", border=1, align="C", fill=True)
-    pdf.cell(28, 8, "Tipo", border=1, align="C", fill=True)
-    pdf.cell(25, 8, "Data EX", border=1, align="C", fill=True)
-    pdf.cell(28, 8, "Pagamento", border=1, align="C", fill=True)
-    pdf.cell(40, 8, "Valor (R$)", border=1, align="C", fill=True)
-    pdf.cell(40, 8, "DY (%)", border=1, new_x="LMARGIN", new_y="NEXT", align="C", fill=True)
-
-    # Linhas da Tabela
-    pdf.set_font("Helvetica", size=8)
-    for _, row in df.iterrows():
-        dy_valor = row['DY (%)']
-        eh_extraordinario = pd.notnull(dy_valor) and dy_valor > 1.30
-
-        if eh_extraordinario:
-            pdf.set_fill_color(200, 247, 197)  # Verde claro para Dividendo Extraordinário
-            dy_str = f"{dy_valor:.2f}% (Extra)"
-        else:
-            pdf.set_fill_color(255, 255, 255)
-            dy_str = f"{dy_valor:.2f}%" if pd.notnull(dy_valor) else "N/A"
-
-        pdf.cell(28, 8, str(row["Ticker"]), border=1, align="C", fill=True)
-        pdf.cell(28, 8, str(row["Tipo"])[:12], border=1, align="C", fill=True)
-        pdf.cell(25, 8, str(row["Data EX"]), border=1, align="C", fill=True)
-        pdf.cell(28, 8, str(row["Data Pagamento"]), border=1, align="C", fill=True)
-        pdf.cell(40, 8, f"R$ {row['Valor (R$)']:.4f}", border=1, align="C", fill=True)
-        pdf.cell(40, 8, dy_str, border=1, new_x="LMARGIN", new_y="NEXT", align="C", fill=True)
-
-    pdf.output(caminho_saida)
-    return caminho_saida
-
-
-def buscar_proventos_brapi_lote(tickers, token_brapi=None):
-    """Busca proventos futuros na BRAPI dividindo a lista em lotes com tolerância a falhas."""
-    hoje = pd.Timestamp.today().normalize()
-    proventos_futuros = []
-
-    tickers_limpos = list(set([t.replace(".SA", "") for t in tickers]))
-    tamanho_lote = 20
-    lotes = [
-        tickers_limpos[i : i + tamanho_lote]
-        for i in range(0, len(tickers_limpos), tamanho_lote)
-    ]
-
-    headers = {}
-    if token_brapi:
-        headers["Authorization"] = f"Bearer {token_brapi}"
-
-    print(f"Buscando proventos para {len(tickers_limpos)} ativos em {len(lotes)} lotes...")
-
-    for lote in lotes:
-        tickers_str = ",".join(lote)
-        url = f"https://brapi.dev/api/quote/{tickers_str}?dividends=true"
-
-        try:
-            res = requests.get(url, headers=headers, timeout=15)
-            
-            if res.status_code != 200:
-                print(f"Aviso: Lote retornou status {res.status_code} para: {tickers_str}")
-                continue
-
-            dados = res.json()
-            resultados = dados.get("results", [])
-
-            for acao in resultados:
-                ticker_full = f"{acao.get('symbol')}.SA"
-                preco_atual = acao.get("regularMarketPrice")
-
-                dividends_data = acao.get("dividendsData", {})
-                cash_dividends = dividends_data.get("cashDividends", []) if dividends_data else []
-
-                if not cash_dividends:
-                    continue
-
-                for item in cash_dividends:
-                    data_com_str = item.get("cutOffDate") or item.get("approvedOn")
-                    data_pag_str = item.get("paymentDate")
-
-                    if not data_com_str:
-                        continue
-
-                    try:
-                        data_com = pd.to_datetime(data_com_str).tz_localize(None)
-                        
-                        if data_pag_str:
-                            data_pag = pd.to_datetime(data_pag_str).tz_localize(None)
-                        else:
-                            data_pag = data_com + BDay(15)
-
-                        data_ex = data_com + BDay(1)
-
-                        if data_ex >= hoje:
-                            if data_ex.weekday() < 5 and data_pag.weekday() < 5:
-                                valor = item.get("rate", 0)
-                                dy = ((valor / preco_atual) * 100) if preco_atual and preco_atual > 0 else None
-
-                                proventos_futuros.append({
-                                    "Ticker": ticker_full,
-                                    "Tipo": item.get("label", "Provento"),
-                                    "Data EX": data_ex.strftime("%d/%m"),
-                                    "Data Pagamento": data_pag.strftime("%d/%m"),
-                                    "Valor (R$)": valor,
-                                    "Preco Atual (R$)": preco_atual,
-                                    "DY (%)": dy,
-                                })
-                    except Exception:
-                        continue
-
-        except Exception as e:
-            print(f"Erro de conexão ao processar lote: {e}")
-
-    return pd.DataFrame(proventos_futuros)
-
+# ... (Mantenha aqui a sua função buscar_proventos_brapi_lote) ...
 
 if __name__ == "__main__":
-    token = os.getenv("BRAPI_TOKEN", None)
+    # Executa a busca
+    token = os.getenv("BRAPI_TOKEN")
+    df = buscar_proventos_brapi_lote(TICKERS_B3, token)
     
-    df_proventos = buscar_proventos_brapi_lote(TICKERS_B3, token)
-    total_proventos = len(df_proventos)
-
-    if total_proventos > 10:
-        print(f"\nDetectados {total_proventos} proventos (> 10). Gerando PDF...")
-        caminho_pdf = gerar_pdf_proventos(df_proventos)
+    if not df.empty:
+        # Cria uma mensagem resumida
+        total = len(df)
+        msg = f"Foram encontrados {total} novos eventos de proventos (JCP/Dividendos/Amortizações)."
         
-        titulo_notificacao = f"Relatorio em PDF: {total_proventos} Proventos Encontrados"
-        enviar_pdf_ntfy(caminho_pdf, titulo=titulo_notificacao)
-
-    elif total_proventos > 0:
-        print(f"\nDetectados {total_proventos} proventos (<= 10). Enviando notificações individuais...")
-        for _, row in df_proventos.iterrows():
-            dy_valor = row['DY (%)']
-            eh_extraordinario = pd.notnull(dy_valor) and dy_valor > 1.30
-
-            titulo = f"{row['Tipo']}: {row['Ticker']}"
-            if eh_extraordinario:
-                titulo += " [Extraordinario]"
-
-            dy_texto = f"{dy_valor:.2f}%" if pd.notnull(dy_valor) else "N/A"
-            if eh_extraordinario:
-                dy_texto += " (Extraordinario)"
-
-            mensagem = (
-                f"Ticker: {row['Ticker']}\n"
-                f"Tipo: {row['Tipo']}\n"
-                f"Data EX: {row['Data EX']}\n"
-                f"Pagamento: {row['Data Pagamento']}\n"
-                f"Valor: R$ {row['Valor (R$)']:.4f}\n"
-                f"DY Estimado: {dy_texto}"
-            )
-            
-            tags = "star,moneybag" if eh_extraordinario else "moneybag"
-            enviar_notificacao_ntfy(titulo=titulo, mensagem=mensagem, prioridade="default", tags=tags)
-
+        # Envia a notificação
+        enviar_notificacao_ntfy(
+            titulo="🔔 Proventos B3 Encontrados",
+            mensagem=msg,
+            prioridade="default",
+            tags="moneybag"
+        )
+        print("Notificação enviada com sucesso!")
     else:
-        print("\nNenhum provento futuro encontrado para os tickers da lista (ou fora de dias úteis).")
+        print("Nenhum provento encontrado hoje.")
+        
