@@ -1,7 +1,7 @@
 import os
 import requests
 import pandas as pd
-import yfinance as yf
+from pandas.tseries.offsets import BDay
 from fpdf import FPDF
 
 # Lista de Tickers da B3
@@ -144,7 +144,6 @@ TICKERS_B3 = [
     "XMAL11.SA", "XPIN11.SA", "XPLG11.SA", "XPML11.SA", "XPSF11.SA", "ZAMP3.SA"
 ]
 
-
 def enviar_notificacao_ntfy(titulo, mensagem, prioridade="default", tags=None):
     """Envia uma notificação de texto simples para o ntfy.sh."""
     topico = os.getenv("NTFY_TOPIC", "Yeild_B3")
@@ -208,11 +207,12 @@ def gerar_pdf_proventos(df, caminho_saida="resumo_proventos.pdf"):
     pdf.cell(0, 10, "Resumo de Proventos Declarados", new_x="LMARGIN", new_y="NEXT", align="C")
     pdf.ln(5)
 
-    # Título das Colunas
+    # Título das Colunas (Ajuste de Larguras para caber na página A4 de 190mm úteis)
     pdf.set_font("Helvetica", style="B", size=10)
-    pdf.set_fill_color(240, 240, 240)  # Cinza claro para o cabeçalho
-    pdf.cell(45, 8, "Ticker", border=1, align="C", fill=True)
-    pdf.cell(45, 8, "Data Com", border=1, align="C", fill=True)
+    pdf.set_fill_color(240, 240, 240)
+    pdf.cell(35, 8, "Ticker", border=1, align="C", fill=True)
+    pdf.cell(30, 8, "Data EX", border=1, align="C", fill=True)
+    pdf.cell(35, 8, "Pagamento", border=1, align="C", fill=True)
     pdf.cell(45, 8, "Valor (R$)", border=1, align="C", fill=True)
     pdf.cell(45, 8, "DY (%)", border=1, new_x="LMARGIN", new_y="NEXT", align="C", fill=True)
 
@@ -229,8 +229,9 @@ def gerar_pdf_proventos(df, caminho_saida="resumo_proventos.pdf"):
             pdf.set_fill_color(255, 255, 255)  # Branco padrão
             dy_str = f"{dy_valor:.2f}%" if pd.notnull(dy_valor) else "N/A"
 
-        pdf.cell(45, 8, str(row["Ticker"]), border=1, align="C", fill=True)
-        pdf.cell(45, 8, str(row["Data Com"]), border=1, align="C", fill=True)
+        pdf.cell(35, 8, str(row["Ticker"]), border=1, align="C", fill=True)
+        pdf.cell(30, 8, str(row["Data EX"]), border=1, align="C", fill=True)
+        pdf.cell(35, 8, str(row["Data Pagamento"]), border=1, align="C", fill=True)
         pdf.cell(45, 8, f"R$ {row['Valor (R$)']:.4f}", border=1, align="C", fill=True)
         pdf.cell(45, 8, dy_str, border=1, new_x="LMARGIN", new_y="NEXT", align="C", fill=True)
 
@@ -238,54 +239,87 @@ def gerar_pdf_proventos(df, caminho_saida="resumo_proventos.pdf"):
     return caminho_saida
 
 
-def buscar_proventos(tickers):
-    """Busca proventos com Data Com a partir do dia atual e identifica dividendos extraordinários (DY > 1.30%)."""
-    hoje = pd.Timestamp.today().normalize().tz_localize(None)
+def buscar_proventos_brapi_lote(tickers, token_brapi=None):
+    """
+    Busca proventos futuros na BRAPI dividindo a lista em lotes.
+    Filtra datas EX e Pagamento para garantir que sejam em dias úteis (Seg-Sex).
+    """
+    hoje = pd.Timestamp.today().normalize()
     proventos_futuros = []
 
-    print(f"Buscando proventos para {len(tickers)} ativos...")
+    tickers_limpos = list(set([t.replace(".SA", "") for t in tickers]))
+    tamanho_lote = 20
+    lotes = [
+        tickers_limpos[i : i + tamanho_lote]
+        for i in range(0, len(tickers_limpos), tamanho_lote)
+    ]
 
-    for ticker in tickers:
+    print(f"Buscando proventos para {len(tickers_limpos)} ativos em {len(lotes)} requisições (BRAPI)...")
+
+    for lote in lotes:
+        tickers_str = ",".join(lote)
+        url = f"https://brapi.dev/api/quote/{tickers_str}?dividends=true"
+        if token_brapi:
+            url += f"&token={token_brapi}"
+
         try:
-            acao = yf.Ticker(ticker)
-            dividends = acao.dividends
+            res = requests.get(url, timeout=15)
+            if res.status_code != 200:
+                print(f"Erro no lote ({res.status_code}): {tickers_str}")
+                continue
 
-            if not dividends.empty:
-                dividends.index = dividends.index.tz_localize(None)
-                # Filtra apenas registros do dia atual em diante
-                dividends_filtrados = dividends[dividends.index >= hoje]
+            dados = res.json()
+            resultados = dados.get("results", [])
 
-                if not dividends_filtrados.empty:
-                    # Tenta obter a cotação atual do ativo para calcular o DY
-                    preco_atual = None
-                    try:
-                        info = acao.fast_info
-                        preco_atual = info.get('lastPrice') or info.get('previousClose')
-                    except Exception:
-                        preco_atual = None
+            for acao in resultados:
+                ticker_full = f"{acao.get('symbol')}.SA"
+                preco_atual = acao.get("regularMarketPrice")
 
-                    for data, valor in dividends_filtrados.items():
-                        # Cálculo do Dividend Yield (%)
-                        if preco_atual and preco_atual > 0:
-                            dy = (valor / preco_atual) * 100
-                        else:
-                            dy = None
+                cash_dividends = acao.get("dividendsData", {}).get("cashDividends", [])
 
-                        proventos_futuros.append({
-                            "Ticker": ticker,
-                            "Data Com": data.strftime("%d/%m"),
-                            "Valor (R$)": valor,
-                            "Preco Atual (R$)": preco_atual,
-                            "DY (%)": dy
-                        })
+                for item in cash_dividends:
+                    data_com_str = item.get("cutOffDate") or item.get("approvedOn")
+                    data_pag_str = item.get("paymentDate")
+
+                    if not data_com_str or not data_pag_str:
+                        continue
+
+                    # Converte para Timestamp
+                    data_com = pd.to_datetime(data_com_str).tz_localize(None)
+                    data_pag = pd.to_datetime(data_pag_str).tz_localize(None)
+
+                    # Calcula a Data EX como o próximo dia útil após a Data Com (BDay = Business Day)
+                    data_ex = data_com + BDay(1)
+
+                    # Filtra do dia atual em diante
+                    if data_ex >= hoje:
+                        # Verifica se Data EX e Data Pagamento são dias úteis (Segunda a Sexta = 0 a 4)
+                        if data_ex.weekday() < 5 and data_pag.weekday() < 5:
+                            
+                            valor = item.get("rate", 0)
+                            dy = ((valor / preco_atual) * 100) if preco_atual and preco_atual > 0 else None
+
+                            proventos_futuros.append({
+                                "Ticker": ticker_full,
+                                "Tipo": item.get("label", "Provento"),
+                                "Data EX": data_ex.strftime("%d/%m"),
+                                "Data Pagamento": data_pag.strftime("%d/%m"),
+                                "Valor (R$)": valor,
+                                "Preco Atual (R$)": preco_atual,
+                                "DY (%)": dy,
+                            })
+
         except Exception as e:
-            print(f"Erro ao buscar dados do ticker {ticker}: {e}")
+            print(f"Erro ao processar lote {tickers_str}: {e}")
 
     return pd.DataFrame(proventos_futuros)
 
 
 if __name__ == "__main__":
-    df_proventos = buscar_proventos(TICKERS_B3)
+    # Token Opcional BRAPI (Pegue em brapi.dev caso bata limites de API)
+    token = os.getenv("BRAPI_TOKEN", None)
+    
+    df_proventos = buscar_proventos_brapi_lote(TICKERS_B3, token)
     total_proventos = len(df_proventos)
 
     if total_proventos > 10:
@@ -301,7 +335,7 @@ if __name__ == "__main__":
             dy_valor = row['DY (%)']
             eh_extraordinario = pd.notnull(dy_valor) and dy_valor > 1.30
 
-            titulo = f"Provento: {row['Ticker']}"
+            titulo = f"{row['Tipo']}: {row['Ticker']}"
             if eh_extraordinario:
                 titulo += " [Dividendo Extraordinario]"
 
@@ -311,7 +345,8 @@ if __name__ == "__main__":
 
             mensagem = (
                 f"Ticker: {row['Ticker']}\n"
-                f"Data Com: {row['Data Com']}\n"
+                f"Data EX: {row['Data EX']}\n"
+                f"Pagamento: {row['Data Pagamento']}\n"
                 f"Valor: R$ {row['Valor (R$)']:.4f}\n"
                 f"DY Estimado: {dy_texto}"
             )
@@ -320,4 +355,4 @@ if __name__ == "__main__":
             enviar_notificacao_ntfy(titulo=titulo, mensagem=mensagem, prioridade="default", tags=tags)
 
     else:
-        print("\nNenhum provento futuro ou do dia atual encontrado para os tickers da lista.")
+        print("\nNenhum provento futuro encontrado para os tickers da lista (ou fora de dias úteis).")
