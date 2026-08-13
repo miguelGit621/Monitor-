@@ -4,7 +4,8 @@ import pandas as pd
 from pandas.tseries.offsets import BDay
 
 # Lista de Tickers
-TICKERS_B3 = ["A1MD34.SA", "A2MC34.SA", "AALR3.SA", "AAPL34.SA", "AAZQ11.SA", "ABBV34.SA",
+TICKERS_B3 = [
+    "A1MD34.SA", "A2MC34.SA", "AALR3.SA", "AAPL34.SA", "AAZQ11.SA", "ABBV34.SA",
     "ABCB4.SA", "ABCP11.SA", "ABEV3.SA", "ABTT34.SA", "ACCN34.SA", "ACNB34.SA",
     "ADBE34.SA", "ADPR34.SA", "ADSK34.SA", "AEXA34.SA", "AFGB34.SA", "AFHI11.SA",
     "AFOF11.SA", "AGRO3.SA", "AGRO34.SA", "AGXY3.SA", "AHEB3.SA", "AHEB4.SA",
@@ -141,9 +142,7 @@ TICKERS_B3 = ["A1MD34.SA", "A2MC34.SA", "AALR3.SA", "AAPL34.SA", "AAZQ11.SA", "A
     "WLMM4.SA", "WMBR34.SA", "WMTB34.SA", "WSTB34.SA", "WTSP11.SA", "XINA11.SA",
     "XMAL11.SA", "XPIN11.SA", "XPLG11.SA", "XPML11.SA", "XPSF11.SA", "ZAMP3.SA"
 ]
-
 def enviar_notificacao_ntfy(titulo, mensagem, prioridade="default", tags=None):
-    """Envia notificação para o tópico Yeild_B3 via ntfy.sh"""
     topico = "Yeild_B3"
     url = f"https://ntfy.sh/{topico}"
     headers = {"Title": titulo, "Priority": prioridade}
@@ -157,12 +156,13 @@ def enviar_notificacao_ntfy(titulo, mensagem, prioridade="default", tags=None):
         print(f"Erro ao enviar notificação: {e}")
 
 def buscar_proventos_brapi_lote(tickers, token_brapi=None):
-    """Busca proventos futuros na BRAPI."""
     hoje = pd.Timestamp.today().normalize()
-    proventos_futuros = []
+    # Define o limite de 7 dias a partir de hoje
+    limite_sete_dias = hoje + pd.Timedelta(days=7)
+    
+    proventos_encontrados = []
     tickers_limpos = list(set([t.replace(".SA", "") for t in tickers]))
     
-    # Lotes de 5 para evitar erro 400
     tamanho_lote = 5
     lotes = [tickers_limpos[i : i + tamanho_lote] for i in range(0, len(tickers_limpos), tamanho_lote)]
     
@@ -174,12 +174,23 @@ def buscar_proventos_brapi_lote(tickers, token_brapi=None):
             res = requests.get(url, headers=headers, timeout=15)
             if res.status_code == 200:
                 for acao in res.json().get("results", []):
+                    ticker = acao.get("symbol")
                     for item in acao.get("dividendsData", {}).get("cashDividends", []):
-                        data_com = pd.to_datetime(item.get("cutOffDate")).tz_localize(None)
-                        if (data_com + BDay(1)) >= hoje:
-                            proventos_futuros.append(f"{acao.get('symbol')}: {item.get('label')} - R$ {item.get('rate')}")
-        except Exception: continue
-    return proventos_futuros
+                        data_com_str = item.get("cutOffDate")
+                        if not data_com_str: continue
+                        
+                        data_com = pd.to_datetime(data_com_str).tz_localize(None)
+                        
+                        # Filtro: Data COM é hoje ou nos próximos 7 dias
+                        if hoje <= data_com <= limite_sete_dias:
+                            proventos_encontrados.append(
+                                f"{ticker}: {item.get('label')} | Data COM: {data_com.strftime('%d/%m')} | Valor: R$ {item.get('rate')}"
+                            )
+        except Exception as e:
+            print(f"Erro no lote {lote}: {e}")
+            continue
+            
+    return proventos_encontrados
 
 if __name__ == "__main__":
     token = os.getenv("BRAPI_TOKEN")
@@ -187,8 +198,8 @@ if __name__ == "__main__":
     
     if resultados:
         msg = "\n".join(resultados)
-        enviar_notificacao_ntfy("Proventos Detectados", msg, tags="moneybag")
-        print("Notificação enviada!")
+        print(f"Proventos encontrados:\n{msg}")
+        enviar_notificacao_ntfy("Proventos Próximos 7 Dias", msg, tags="moneybag")
     else:
-        print("Nenhum provento para hoje.")
+        print("Nenhum provento com Data COM nos próximos 7 dias.")
         
