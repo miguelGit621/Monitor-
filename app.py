@@ -156,8 +156,9 @@ def enviar_notificacao_ntfy(titulo, mensagem, prioridade="default", tags=None):
         print(f"Erro ao enviar notificação: {e}")
 
 def buscar_proventos_brapi_lote(tickers, token_brapi=None):
-    hoje = pd.Timestamp.today().normalize()
-    # Define o limite de 7 dias a partir de hoje
+    # Usamos o dia de hoje sem horas (midnight)
+    hoje = pd.Timestamp.now().normalize()
+    # Limite de 7 dias a partir de hoje
     limite_sete_dias = hoje + pd.Timedelta(days=7)
     
     proventos_encontrados = []
@@ -175,20 +176,32 @@ def buscar_proventos_brapi_lote(tickers, token_brapi=None):
             if res.status_code == 200:
                 for acao in res.json().get("results", []):
                     ticker = acao.get("symbol")
-                    for item in acao.get("dividendsData", {}).get("cashDividends", []):
+                    # Alguns ativos podem não ter o dicionário de proventos
+                    div_data = acao.get("dividendsData")
+                    if not div_data or "cashDividends" not in div_data:
+                        continue
+                        
+                    for item in div_data["cashDividends"]:
                         data_com_str = item.get("cutOffDate")
                         if not data_com_str: continue
                         
-                        data_com = pd.to_datetime(data_com_str).tz_localize(None)
+                        # CONVERSÃO MAIS ROBUSTA: 
+                        # pd.to_datetime tenta inferir o formato. 
+                        # .tz_localize(None) remove qualquer fuso horário para comparar apenas a data.
+                        data_com = pd.to_datetime(data_com_str).tz_localize(None).normalize()
                         
-                        # Filtro: Data COM é hoje ou nos próximos 7 dias
+                        # Comparação: Data COM é hoje ou nos próximos 7 dias
                         if hoje <= data_com <= limite_sete_dias:
                             proventos_encontrados.append(
                                 f"{ticker}: {item.get('label')} | Data COM: {data_com.strftime('%d/%m')} | Valor: R$ {item.get('rate')}"
                             )
+   
         except Exception as e:
-            print(f"Erro no lote {lote}: {e}")
+            print(f"Erro ao processar o lote {lote}: {e}")
             continue
+            
+    return proventos_encontrados
+    
             
     return proventos_encontrados
 
