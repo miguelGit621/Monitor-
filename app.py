@@ -156,10 +156,11 @@ def enviar_notificacao_ntfy(titulo, mensagem, prioridade="default", tags=None):
         print(f"Erro ao enviar notificação: {e}")
 
 def buscar_proventos_brapi_lote(tickers, token_brapi=None):
-    # Usamos o dia de hoje sem horas (midnight)
     hoje = pd.Timestamp.now().normalize()
-    # Limite de 7 dias a partir de hoje
-    limite_sete_dias = hoje + pd.Timedelta(days=7)
+    # Se você quiser olhar 7 dias para trás e 7 dias para frente, ajuste aqui. 
+    # Como você citou "últimos 7 dias", vamos abrir a janela para abranger o passado recente e futuro próximo:
+    inicio_janela = hoje - pd.Timedelta(days=7)
+    fim_janela = hoje + pd.Timedelta(days=7)
     
     proventos_encontrados = []
     tickers_limpos = list(set([t.replace(".SA", "") for t in tickers]))
@@ -170,13 +171,13 @@ def buscar_proventos_brapi_lote(tickers, token_brapi=None):
     headers = {"Authorization": f"Bearer {token_brapi}"} if token_brapi else {}
 
     for lote in lotes:
-        url = f"https://brapi.dev/api/quote/{','.join(lote)}?dividends=true"
+        # Adicionamos '&range=3mo' para garantir que a API traga o histórico recente de dividendos
+        url = f"https://brapi.dev/api/quote/{','.join(lote)}?dividends=true&range=3mo"
         try:
             res = requests.get(url, headers=headers, timeout=15)
             if res.status_code == 200:
                 for acao in res.json().get("results", []):
                     ticker = acao.get("symbol")
-                    # Alguns ativos podem não ter o dicionário de proventos
                     div_data = acao.get("dividendsData")
                     if not div_data or "cashDividends" not in div_data:
                         continue
@@ -185,23 +186,16 @@ def buscar_proventos_brapi_lote(tickers, token_brapi=None):
                         data_com_str = item.get("cutOffDate")
                         if not data_com_str: continue
                         
-                        # CONVERSÃO MAIS ROBUSTA: 
-                        # pd.to_datetime tenta inferir o formato. 
-                        # .tz_localize(None) remove qualquer fuso horário para comparar apenas a data.
                         data_com = pd.to_datetime(data_com_str).tz_localize(None).normalize()
                         
-                        # Comparação: Data COM é hoje ou nos próximos 7 dias
-                        if hoje <= data_com <= limite_sete_dias:
+                        # Filtro ajustado para a janela de 7 dias atrás até 7 dias à frente
+                        if inicio_janela <= data_com <= fim_janela:
                             proventos_encontrados.append(
                                 f"{ticker}: {item.get('label')} | Data COM: {data_com.strftime('%d/%m')} | Valor: R$ {item.get('rate')}"
                             )
-   
         except Exception as e:
             print(f"Erro ao processar o lote {lote}: {e}")
             continue
-            
-    return proventos_encontrados
-    
             
     return proventos_encontrados
 
@@ -212,7 +206,7 @@ if __name__ == "__main__":
     if resultados:
         msg = "\n".join(resultados)
         print(f"Proventos encontrados:\n{msg}")
-        enviar_notificacao_ntfy("Proventos Próximos 7 Dias", msg, tags="moneybag")
+        enviar_notificacao_ntfy("Proventos Detectados", msg, tags="moneybag")
     else:
-        print("Nenhum provento com Data COM nos próximos 7 dias.")
+        print("Nenhum provento encontrado na janela de 7 dias.")
         
