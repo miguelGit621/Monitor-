@@ -142,30 +142,40 @@ TICKERS_B3 = [
     "WLMM4.SA", "WMBR34.SA", "WMTB34.SA", "WSTB34.SA", "WTSP11.SA", "XINA11.SA",
     "XMAL11.SA", "XPIN11.SA", "XPLG11.SA", "XPML11.SA", "XPSF11.SA", "ZAMP3.SA"
 ]
+    
 
 def enviar_notificacao_ntfy(titulo, mensagem, prioridade="default", tags=None):
+    """Envia notificação diretamente para o tópico Yeild_B3 no ntfy.sh"""
     topico = "Yeild_B3"
     url = f"https://ntfy.sh/{topico}"
-    headers = {"Title": titulo, "Priority": prioridade}
-    if tags: headers["Tags"] = tags
+    
+    headers = {
+        "Title": titulo,
+        "Priority": prioridade
+    }
+    if tags:
+        headers["Tags"] = tags
+        
+    # Pega o token opcional de segurança do ntfy cadastrado nas Secrets do GitHub
     token = os.getenv("NTFY_TOKEN")
-    if token: headers["Authorization"] = f"Bearer {token}"
+    if token:
+        headers["Authorization"] = f"Bearer {token}"
     
     try:
-        requests.post(url, data=mensagem.encode('utf-8'), headers=headers, timeout=10)
+        response = requests.post(url, data=mensagem.encode('utf-8'), headers=headers, timeout=10)
+        response.raise_for_status()
+        print("Notificação enviada com sucesso para o ntfy!")
     except Exception as e:
-        print(f"Erro ao enviar notificação: {e}")
+        print(f"Erro ao enviar notificação para o ntfy: {e}")
 
 def buscar_proventos_brapi_lote(tickers, token_brapi=None):
     hoje = pd.Timestamp.now().normalize()
-    # Janela de monitoramento (30 dias para trás e 30 para frente para capturar eventos)
     inicio_janela = hoje - pd.Timedelta(days=30)
     fim_janela = hoje + pd.Timedelta(days=30)
     
     proventos_encontrados = []
     tickers_limpos = [t.replace(".SA", "") for t in tickers]
     
-    # O endpoint v2 aceita múltiplos símbolos separados por vírgula
     tamanho_lote = 10
     lotes = [tickers_limpos[i : i + tamanho_lote] for i in range(0, len(tickers_limpos), tamanho_lote)]
     
@@ -180,13 +190,11 @@ def buscar_proventos_brapi_lote(tickers, token_brapi=None):
             res = requests.get(url, headers=headers, timeout=15)
             if res.status_code == 200:
                 dados_json = res.json()
-                # A API v2 retorna uma lista de stocks com seus respectivos dividendos
                 for stock in dados_json.get("stocks", []):
                     ticker = stock.get("symbol")
                     cash_dividends = stock.get("cashDividends", [])
                     
                     for item in cash_dividends:
-                        # Na v2, a data COM vem padronizada em lastDatePrior ou cutOffDate
                         data_com_str = item.get("lastDatePrior") or item.get("cutOffDate")
                         if not data_com_str: 
                             continue
