@@ -142,6 +142,7 @@ TICKERS_B3 = [
     "WLMM4.SA", "WMBR34.SA", "WMTB34.SA", "WSTB34.SA", "WTSP11.SA", "XINA11.SA",
     "XMAL11.SA", "XPIN11.SA", "XPLG11.SA", "XPML11.SA", "XPSF11.SA", "ZAMP3.SA"
 ]
+
 def enviar_notificacao_ntfy(titulo, mensagem, prioridade="default", tags=None):
     topico = "Yeild_B3"
     url = f"https://ntfy.sh/{topico}"
@@ -157,44 +158,54 @@ def enviar_notificacao_ntfy(titulo, mensagem, prioridade="default", tags=None):
 
 def buscar_proventos_brapi_lote(tickers, token_brapi=None):
     hoje = pd.Timestamp.now().normalize()
-    # Se você quiser olhar 7 dias para trás e 7 dias para frente, ajuste aqui. 
-    # Como você citou "últimos 7 dias", vamos abrir a janela para abranger o passado recente e futuro próximo:
-    inicio_janela = hoje - pd.Timedelta(days=7)
-    fim_janela = hoje + pd.Timedelta(days=7)
+    # Janela de monitoramento (30 dias para trás e 30 para frente para capturar eventos)
+    inicio_janela = hoje - pd.Timedelta(days=30)
+    fim_janela = hoje + pd.Timedelta(days=30)
     
     proventos_encontrados = []
-    tickers_limpos = list(set([t.replace(".SA", "") for t in tickers]))
+    tickers_limpos = [t.replace(".SA", "") for t in tickers]
     
-    tamanho_lote = 5
+    # O endpoint v2 aceita múltiplos símbolos separados por vírgula
+    tamanho_lote = 10
     lotes = [tickers_limpos[i : i + tamanho_lote] for i in range(0, len(tickers_limpos), tamanho_lote)]
     
     headers = {"Authorization": f"Bearer {token_brapi}"} if token_brapi else {}
 
+    print(f"Iniciando varredura via API v2 de dividendos em {len(lotes)} lotes...")
+
     for lote in lotes:
-        # Adicionamos '&range=3mo' para garantir que a API traga o histórico recente de dividendos
-        url = f"https://brapi.dev/api/quote/{','.join(lote)}?dividends=true&range=3mo"
+        symbols_str = ",".join(lote)
+        url = f"https://brapi.dev/api/v2/stocks/dividends?symbols={symbols_str}"
         try:
             res = requests.get(url, headers=headers, timeout=15)
             if res.status_code == 200:
-                for acao in res.json().get("results", []):
-                    ticker = acao.get("symbol")
-                    div_data = acao.get("dividendsData")
-                    if not div_data or "cashDividends" not in div_data:
-                        continue
+                dados_json = res.json()
+                # A API v2 retorna uma lista de stocks com seus respectivos dividendos
+                for stock in dados_json.get("stocks", []):
+                    ticker = stock.get("symbol")
+                    cash_dividends = stock.get("cashDividends", [])
+                    
+                    for item in cash_dividends:
+                        # Na v2, a data COM vem padronizada em lastDatePrior ou cutOffDate
+                        data_com_str = item.get("lastDatePrior") or item.get("cutOffDate")
+                        if not data_com_str: 
+                            continue
                         
-                    for item in div_data["cashDividends"]:
-                        data_com_str = item.get("cutOffDate")
-                        if not data_com_str: continue
-                        
-                        data_com = pd.to_datetime(data_com_str).tz_localize(None).normalize()
-                        
-                        # Filtro ajustado para a janela de 7 dias atrás até 7 dias à frente
-                        if inicio_janela <= data_com <= fim_janela:
-                            proventos_encontrados.append(
-                                f"{ticker}: {item.get('label')} | Data COM: {data_com.strftime('%d/%m')} | Valor: R$ {item.get('rate')}"
-                            )
+                        try:
+                            data_com = pd.to_datetime(data_com_str).tz_localize(None).normalize()
+                            
+                            if inicio_janela <= data_com <= fim_janela:
+                                tipo = item.get("label", "Provento")
+                                valor = item.get("rate", 0)
+                                proventos_encontrados.append(
+                                    f"{ticker}: {tipo} | Data COM: {data_com.strftime('%d/%m')} | Valor: R$ {valor}"
+                                )
+                        except Exception:
+                            continue
+            else:
+                print(f"Lote {lote} retornou status {res.status_code}")
         except Exception as e:
-            print(f"Erro ao processar o lote {lote}: {e}")
+            print(f"Erro de conexão no lote {lote}: {e}")
             continue
             
     return proventos_encontrados
@@ -203,10 +214,12 @@ if __name__ == "__main__":
     token = os.getenv("BRAPI_TOKEN")
     resultados = buscar_proventos_brapi_lote(TICKERS_B3, token)
     
+    print(f"Total de proventos encontrados na varredura: {len(resultados)}")
+    
     if resultados:
         msg = "\n".join(resultados)
-        print(f"Proventos encontrados:\n{msg}")
+        print(f"\nProventos:\n{msg}")
         enviar_notificacao_ntfy("Proventos Detectados", msg, tags="moneybag")
     else:
-        print("Nenhum provento encontrado na janela de 7 dias.")
+        print("Nenhum provento encontrado no período.")
         
