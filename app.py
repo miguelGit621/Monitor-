@@ -35,7 +35,6 @@ def buscar_proventos_geral():
     
     proventos_encontrados = []
     
-    # Monta parte do token para URL se ele existir
     param_token = f"&token={token_brapi}" if token_brapi else ""
     headers = {"Authorization": f"Bearer {token_brapi}"} if token_brapi else {}
 
@@ -55,16 +54,17 @@ def buscar_proventos_geral():
                     for stock in dados.get("stocks", []):
                         ticker = stock.get("symbol")
                         for item in stock.get("cashDividends", []):
-                            data_com_str = item.get("lastDatePrior") or item.get("cutOffDate") or item.get("approvedOn")
+                            # Prioriza explicitamente a Data Com / Dia Limite (lastDatePrior ou cutOffDate)
+                            data_com_str = item.get("lastDatePrior") or item.get("cutOffDate")
                             if not data_com_str: continue
                             
                             try:
                                 data_com = pd.to_datetime(data_com_str).tz_localize(None).normalize()
                                 if inicio_janela <= data_com <= fim_janela:
-                                    tipo = item.get("label", "Dividendo/JCP")
+                                    tipo = item.get("label", "Dividendo/JCP/Amortização")
                                     valor = item.get("rate", 0)
                                     proventos_encontrados.append(
-                                        f"{ticker}: {tipo} | Data COM: {data_com.strftime('%d/%m')} | R$ {valor}"
+                                        f"{ticker}: {tipo} | Dia Limite (Data COM): {data_com.strftime('%d/%m')} | R$ {valor}"
                                     )
                             except Exception:
                                 continue
@@ -82,7 +82,8 @@ def buscar_proventos_geral():
                 if res.status_code == 200:
                     dados = res.json()
                     for item in dados.get("dividends", []):
-                        data_com_str = item.get("lastDatePrior") or item.get("dataCom") or item.get("approvedOn")
+                        # Prioriza explicitamente a Data Com / Dia Limite
+                        data_com_str = item.get("lastDatePrior") or item.get("dataCom")
                         if not data_com_str: continue
                         
                         try:
@@ -90,7 +91,7 @@ def buscar_proventos_geral():
                             if inicio_janela <= data_com <= fim_janela:
                                 valor = item.get("rate", 0) or item.get("cashDividends", 0) or item.get("value", 0)
                                 proventos_encontrados.append(
-                                    f"{ticker} (FII): Rendimento | Data COM: {data_com.strftime('%d/%m')} | R$ {valor}"
+                                    f"{ticker} (FII): Rendimento | Dia Limite (Data COM): {data_com.strftime('%d/%m')} | R$ {valor}"
                                 )
                         except Exception:
                             continue
@@ -107,7 +108,6 @@ if __name__ == "__main__":
     if resultados:
         msg = "\n".join(resultados)
         print(f"\nProventos:\n{msg}")
-        enviar_notificacao_ntfy("Proventos Detectados", msg, tags="moneybag")
+        enviar_notificacao_ntfy("Proventos Detectados (Dia Limite / Data COM)", msg, tags="moneybag")
     else:
         print("Nenhum provento encontrado no período.")
-        
