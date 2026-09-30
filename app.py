@@ -118,13 +118,12 @@ def job_diario():
     except Exception as e:
         print(f"Erro na execução da varredura diária: {e}")
 
+
 if __name__ == "__main__":
-    fuso_brasilia = ZoneInfo("America/Sao_Paulo")
+    buscar_proventos_geral()
     
-    # Agenda para rodar todo dia às 06:00 da manhã no Horário de Brasília
+ 
     
-    print("Serviço de monitoramento de proventos iniciado.")
-    print("Aguardando o horário agendado (06:00 AM - Horário de Brasília)...")
     
     # Opcional: Descomente a linha abaixo se quiser testar imediatamente ao rodar o script
 
