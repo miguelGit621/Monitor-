@@ -31,11 +31,14 @@ def enviar_notificacao_ntfy(titulo, mensagem, prioridade="default", tags=None):
         print(f"Erro ao enviar notificação para o ntfy: {e}")
 
 def buscar_proventos_geral():
-    # Pega a data de hoje baseada estritamente no Horário de Brasília
     fuso_brasilia = ZoneInfo("America/Sao_Paulo")
     hoje = pd.Timestamp(datetime.now(fuso_brasilia)).normalize().tz_localize(None)
     
-    print(f"\n[{datetime.now(fuso_brasilia).strftime('%d/%m/%Y %H:%M:%S')}] Iniciando varredura para a Data Limite (Data COM) de hoje: {hoje.strftime('%d/%m/%Y')}")
+    # Janela: dia atual e os próximos 3 dias
+    inicio_janela = hoje
+    fim_janela = hoje + pd.Timedelta(days=3)
+    
+    print(f"\n[{datetime.now(fuso_brasilia).strftime('%d/%m/%Y %H:%M:%S')}] Varrendo Data Limite (Data COM) entre {inicio_janela.strftime('%d/%m/%Y')} e {fim_janela.strftime('%d/%m/%Y')}")
     
     token_brapi = os.getenv("BRAPI_TOKEN", "")
     proventos_encontrados = []
@@ -63,12 +66,11 @@ def buscar_proventos_geral():
                             
                             try:
                                 data_com = pd.to_datetime(data_com_str).tz_localize(None).normalize()
-                                # Filtra estritamente se a Data COM cai exatamente no dia de hoje
-                                if data_com == hoje:
+                                if inicio_janela <= data_com <= fim_janela:
                                     tipo = item.get("label", "Dividendo/JCP/Amortização")
                                     valor = item.get("rate", 0)
                                     proventos_encontrados.append(
-                                        f"{ticker}: {tipo} | Dia Limite (Data COM) Hoje! | R$ {valor}"
+                                        f"{ticker}: {tipo} | Dia Limite (Data COM): {data_com.strftime('%d/%m')} | R$ {valor}"
                                     )
                             except Exception:
                                 continue
@@ -90,11 +92,10 @@ def buscar_proventos_geral():
                         
                         try:
                             data_com = pd.to_datetime(data_com_str).tz_localize(None).normalize()
-                            # Filtra estritamente se a Data COM cai exatamente no dia de hoje
-                            if data_com == hoje:
+                            if inicio_janela <= data_com <= fim_janela:
                                 valor = item.get("rate", 0) or item.get("cashDividends", 0) or item.get("value", 0)
                                 proventos_encontrados.append(
-                                    f"{ticker} (FII): Rendimento | Dia Limite (Data COM) Hoje! | R$ {valor}"
+                                    f"{ticker} (FII): Rendimento | Dia Limite (Data COM): {data_com.strftime('%d/%m')} | R$ {valor}"
                                 )
                         except Exception:
                             continue
@@ -102,14 +103,15 @@ def buscar_proventos_geral():
                 print(f"Erro no FII {ticker}: {e}")
                 
     resultados_unicos = list(set(proventos_encontrados))
-    print(f"Total de proventos com Data Limite hoje encontrados: {len(resultados_unicos)}")
+    print(f"Total de proventos encontrados na janela: {len(resultados_unicos)}")
     
     if resultados_unicos:
         msg = "\n".join(resultados_unicos)
         print(f"\nProventos:\n{msg}")
-        enviar_notificacao_ntfy("Alerta: Dia Limite (Data COM) Hoje!", msg, tags="moneybag,bell")
+        enviar_notificacao_ntfy("Proventos Detectados (Próximos Dias)", msg, tags="moneybag,bell")
     else:
-        print("Nenhum provento com Data Limite hoje.")
+        print("Nenhum provento encontrado no período.")
+        enviar_notificacao_ntfy("Monitoramento B3", "nenhum provento encontrado", tags="information_source")
 
 def job_diario():
     try:
@@ -126,7 +128,7 @@ if __name__ == "__main__":
     print("Serviço de monitoramento de proventos iniciado.")
     print("Aguardando o horário agendado (06:00 AM - Horário de Brasília)...")
     
-    # Opcional: Se quiser testar imediatamente ao rodar o script pela primeira vez, descomente a linha abaixo:
+    # Opcional: Descomente a linha abaixo se quiser testar imediatamente ao rodar o script
     # job_diario()
 
     while True:
