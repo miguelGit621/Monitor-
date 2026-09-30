@@ -123,15 +123,11 @@ if __name__ == "__main__":
     fuso_brasilia = ZoneInfo("America/Sao_Paulo")
     
     # Agenda para rodar todo dia às 06:00 da manhã no Horário de Brasília
-    schedule.every().day.at("06:00", tz=fuso_brasilia).do(job_diario)
     
     print("Serviço de monitoramento de proventos iniciado.")
     print("Aguardando o horário agendado (06:00 AM - Horário de Brasília)...")
     
     # Opcional: Descomente a linha abaixo se quiser testar imediatamente ao rodar o script
-    # job_diario()
 
-    while True:
-        schedule.run_pending()
-        time.sleep(30)
+
         
